@@ -5,7 +5,6 @@ import { z } from "zod";
 
 const RescheduleSchema = z.object({
   scheduledAt: z.iso.datetime(),
-  reason: z.string().optional(),
 });
 
 export async function PATCH(
@@ -24,80 +23,80 @@ export async function PATCH(
       );
     }
 
-    const org = await prisma.organization.findUnique({
-      where: { slug },
-      select: { id: true, whatsappEnabled: true, googleCalendarEnabled: true },
-    });
+    const org = await prisma.organization.findUnique({ where: { slug } });
     if (!org) {
-      return NextResponse.json(
-        { error: "Organización no encontrada" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
     }
 
     const booking = await prisma.booking.findFirst({
       where: { id: bookingId, organizationId: org.id },
     });
     if (!booking) {
-      return NextResponse.json(
-        { error: "Reserva no encontrada" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Reserva no encontrada" }, { status: 404 });
     }
     if (booking.status === "CANCELLED") {
-      return NextResponse.json(
-        { error: "No se puede reagendar una reserva cancelada" },
-        { status: 422 }
-      );
+      return NextResponse.json({ error: "No se puede reagendar una reserva cancelada" }, { status: 400 });
     }
 
     const newScheduledAt = new Date(parsed.data.scheduledAt);
 
-    // Registrar historial de reagendamiento + actualizar booking en transacción
-    const [, updated] = await prisma.$transaction([
-      prisma.bookingReschedule.create({
-        data: {
-          organizationId: org.id,
-          bookingId: booking.id,
-          previousScheduledAt: booking.scheduledAt,
-          newScheduledAt,
-          reason: parsed.data.reason,
+    // Verificar disponibilidad en el nuevo slot
+    const conflict = await prisma.booking.findFirst({
+      where: {
+        professionalId: booking.professionalId,
+        id: { not: bookingId },
+        status: { in: ["PENDING", "CONFIRMED"] },
+        scheduledAt: {
+          gte: newScheduledAt,
+          lt: new Date(newScheduledAt.getTime() + booking.durationMinutes * 60000),
         },
-      }),
-      prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          scheduledAt: newScheduledAt,
-          status: "RESCHEDULED",
-        },
-      }),
-    ]);
+      },
+    });
+    if (conflict) {
+      return NextResponse.json({ error: "El slot ya no está disponible" }, { status: 409 });
+    }
 
-    // Notificaciones de reagendamiento
-    const jobs = [];
+    // Guardar historial de reagendamiento
+    await prisma.bookingReschedule.create({
+      data: {
+        bookingId: booking.id,
+        previousScheduledAt: booking.scheduledAt,
+        newScheduledAt,
+        reason: body.reason ?? null,
+      },
+    });
+
+    const updated = await prisma.booking.update({
+      where: { id: bookingId },
+      data: { scheduledAt: newScheduledAt, status: "CONFIRMED" },
+    });
+
+    // Encolar notificaciones de reagendamiento
+    const jobs: Promise<unknown>[] = [];
+
     if (org.whatsappEnabled) {
       jobs.push(
         enqueueNotification({
           organizationId: org.id,
-          bookingId: booking.id,
+          bookingId,
           type: "BOOKING_RESCHEDULED",
           channel: "WHATSAPP",
         })
       );
     }
+
     if (org.googleCalendarEnabled) {
       jobs.push(
         enqueueNotification({
           organizationId: org.id,
-          bookingId: booking.id,
+          bookingId,
           type: "BOOKING_RESCHEDULED",
           channel: "CALENDAR",
         })
       );
     }
-    Promise.all(jobs).catch((e) =>
-      console.error("[reschedule] notify error", e)
-    );
+
+    Promise.all(jobs).catch((e) => console.error("[reschedule] enqueue error", e));
 
     return NextResponse.json({ booking: updated });
   } catch (err) {
