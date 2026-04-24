@@ -50,6 +50,8 @@ Un tenant puede tener múltiples doctores. Cada doctor maneja su propia agenda.
 
 ## 4. Entidades del Dominio
 
+> El schema completo con tipos, índices y relaciones está en [`prisma/schema.prisma`](./prisma/schema.prisma). Esta sección describe el propósito de cada entidad.
+
 ### 4.1 Organization (Tenant)
 - `id`, `slug` (usado en URL: `/{slug}/servicios`)
 - `name`, `logo_url`, `phone_whatsapp`
@@ -69,25 +71,26 @@ Un tenant puede tener múltiples doctores. Cada doctor maneja su propia agenda.
 ### 4.3 Service (Servicio médico)
 - `id`, `organization_id`, `professional_id`
 - `name`, `description`, `duration_minutes`
-- `price`, `currency`
+- `price` (Decimal 10,2), `currency`
 - `active` (boolean)
 
 ### 4.4 AvailabilityRule (Horarios del doctor)
-- `id`, `professional_id`
+- `id`, `professional_id`, `organization_id`
 - `day_of_week` (0=Dom ... 6=Sáb)
-- `start_time`, `end_time` (ej: "08:00", "17:00")
+- `start_time`, `end_time` (ej: `"08:00"`, `"17:00"`)
 - `slot_duration_minutes` (ej: 30)
 - `active` (boolean)
 
 ### 4.5 BlackoutDate (Bloqueos / días no disponibles)
-- `id`, `professional_id`
-- `date`, `start_time`, `end_time`
+- `id`, `professional_id`, `organization_id`
+- `date`, `start_time`, `end_time` (si ambos son null → bloqueo total del día)
 - `reason` (opcional)
 
 ### 4.6 Booking (Reserva)
-- `id` (nanoid), `organization_id`, `professional_id`, `service_id`
+- `id` (cuid — generado por Prisma `@default(cuid())`)
+- `organization_id`, `professional_id`, `service_id`
 - `patient_name`, `patient_email`, `patient_phone`
-- `scheduled_at` (timestamp con timezone)
+- `scheduled_at` (timestamp UTC — conversiones con `date-fns-tz`)
 - `duration_minutes`
 - `status`: `PENDING` | `CONFIRMED` | `CANCELLED` | `RESCHEDULED` | `COMPLETED`
 - `payment_status`: `UNPAID` | `PAID` | `REFUNDED`
@@ -97,20 +100,20 @@ Un tenant puede tener múltiples doctores. Cada doctor maneja su propia agenda.
 - `created_at`, `updated_at`
 
 ### 4.7 BookingReschedule (Historial de cambios de fecha)
-- `id`, `booking_id`
+- `id`, `booking_id`, `organization_id`
 - `previous_scheduled_at`
 - `new_scheduled_at`
 - `reason`
 - `created_at`
 
 ### 4.8 NotificationJob (Cola de notificaciones)
-- `id`, `booking_id`
+- `id`, `booking_id`, `organization_id`
 - `type`: `BOOKING_CONFIRMED` | `BOOKING_CANCELLED` | `BOOKING_RESCHEDULED` | `REMINDER_24H`
 - `channel`: `WHATSAPP` | `EMAIL` | `CALENDAR`
 - `status`: `PENDING` | `SENT` | `FAILED`
 - `scheduled_for` (para recordatorios futuros)
 - `attempts`, `last_error`
-- `created_at`
+- `created_at`, `updated_at`
 
 ---
 
@@ -122,35 +125,39 @@ Un tenant puede tener múltiples doctores. Cada doctor maneja su propia agenda.
 1. Paciente entra al ecommerce /{slug}
 2. Selecciona un servicio
 3. El sistema consulta slots disponibles (GET /api/[slug]/availability)
-   → Se calculan slots desde AvailabilityRule menos BlackoutDates y Bookings existentes
-   → Cache en Upstash Redis por 60 segundos
+   → lib/availability.ts → getAvailableSlots()
+   → Calcula slots desde AvailabilityRule menos BlackoutDates y Bookings existentes
+   → Cache en Upstash Redis por 60 segundos (lib/redis.ts)
 4. Paciente elige fecha y hora
 5. Paciente ingresa sus datos (nombre, email, teléfono)
 6. Paciente procede al pago
-7. Al confirmar pago → se crea el Booking con status CONFIRMED, payment_status PAID
-8. QStash encola 4 jobs:
-   a. Notificar WhatsApp al doctor
-   b. Notificar WhatsApp + Email al paciente
-   c. Crear evento en Google Calendar del doctor
-   d. Programar job de recordatorio 24h antes
+7. Webhook del proveedor de pagos → POST /api/webhooks/payment
+   → Valida firma del proveedor
+   → Crea Booking con status CONFIRMED, payment_status PAID (transacción Prisma)
+8. lib/notifications.ts → enqueueBookingConfirmedJobs() encola via QStash:
+   a. WHATSAPP / BOOKING_CONFIRMED → /api/jobs/notify-whatsapp
+   b. EMAIL / BOOKING_CONFIRMED → /api/jobs/notify-email
+   c. CALENDAR / BOOKING_CONFIRMED → /api/jobs/sync-calendar
+   d. WHATSAPP / REMINDER_24H → /api/jobs/reminder (con delay = 24h antes)
 9. Admin del doctor ve la nueva cita en /admin
 ```
 
 ### 5.2 Flujo: Paciente cambia la fecha
 
 ```
-1. Paciente entra al link de su reserva (token único)
+1. Paciente entra al link de su reserva (token único en URL)
 2. Ve su cita actual y botón "Cambiar fecha"
-3. Sistema muestra slots disponibles
+3. Sistema muestra slots disponibles (mismo GET /api/[slug]/availability)
 4. Paciente elige nueva fecha
-5. Se registra en BookingReschedule el cambio
-6. Booking se actualiza: status RESCHEDULED, nueva scheduled_at
-7. QStash encola:
-   a. Notificar WhatsApp al doctor del cambio
-   b. Notificar WhatsApp + Email al paciente
-   c. Actualizar evento en Google Calendar
-   d. Re-programar recordatorio 24h
-8. Admin ve el historial de cambios en /admin
+5. Transacción Prisma:
+   a. Crea BookingReschedule con previous/new scheduled_at
+   b. Actualiza Booking: status RESCHEDULED, nueva scheduled_at
+6. QStash encola:
+   a. WHATSAPP / BOOKING_RESCHEDULED → doctor y paciente
+   b. EMAIL / BOOKING_RESCHEDULED → paciente
+   c. CALENDAR / BOOKING_RESCHEDULED → actualizar evento en Google Calendar
+   d. WHATSAPP / REMINDER_24H → re-programar recordatorio con nuevo delay
+7. Admin ve el historial de cambios (BookingReschedule) en /admin
 ```
 
 ### 5.3 Flujo: Paciente cancela una cita
@@ -158,21 +165,23 @@ Un tenant puede tener múltiples doctores. Cada doctor maneja su propia agenda.
 ```
 1. Paciente entra al link de su reserva
 2. Presiona "Cancelar cita" e ingresa motivo
-3. Booking → status CANCELLED
+3. Booking → status CANCELLED, cancellation_reason guardado
 4. QStash encola:
-   a. Notificar WhatsApp al doctor
-   b. Notificar WhatsApp + Email al paciente (confirmación de cancelación)
-   c. Eliminar/cancelar evento en Google Calendar
+   a. WHATSAPP / BOOKING_CANCELLED → doctor
+   b. WHATSAPP + EMAIL / BOOKING_CANCELLED → paciente
+   c. CALENDAR / BOOKING_CANCELLED → eliminar evento en Google Calendar
 5. Lógica de reembolso según política del tenant (por definir)
 ```
 
 ### 5.4 Flujo: Recordatorio automático 24h antes
 
 ```
-1. Al crear/reagendar una cita, QStash programa un job con delay
-2. Job se ejecuta 24h antes de scheduled_at
-3. Se envía WhatsApp al paciente: "Recordatorio: tienes cita mañana a las X:XX"
-4. Se envía email de recordatorio al paciente
+1. Al crear/reagendar una cita, enqueueBookingConfirmedJobs() calcula:
+   reminder = scheduledAt - 24h
+   Si reminder > now() → encola job REMINDER_24H con scheduledFor = reminder
+2. QStash ejecuta el job en el momento programado → POST /api/jobs/reminder
+3. Job verifica que el Booking aún esté CONFIRMED (no cancelado)
+4. Envía WhatsApp al paciente: "Recordatorio: tienes cita mañana a las X:XX"
 5. NotificationJob queda en status SENT
 ```
 
@@ -242,16 +251,16 @@ app/
 
 ## 7. Reglas de Negocio Críticas
 
-1. **Un slot solo puede tener UNA reserva activa.** Al consultar disponibilidad se excluyen bookings con status `CONFIRMED` o `RESCHEDULED`.
-2. **La disponibilidad se calcula en el timezone del tenant**, no en UTC. Siempre usar `date-fns-tz` para conversiones.
+1. **Un slot solo puede tener UNA reserva activa.** Al consultar disponibilidad se excluyen bookings con status `CONFIRMED`, `PENDING` o `RESCHEDULED`.
+2. **La disponibilidad se calcula en el timezone del tenant**, no en UTC. Siempre usar `date-fns-tz` para conversiones. Ver `lib/availability.ts`.
 3. **Nunca eliminar bookings.** Solo cambiar status. El historial es inmutable.
-4. **Los jobs de notificación son independientes del flujo de pago.** Si un job falla, no afecta la reserva. Se reintenta hasta 3 veces.
+4. **Los jobs de notificación son independientes del flujo de pago.** Si un job falla, no afecta la reserva. Se reintenta hasta 3 veces (QStash retry automático).
 5. **Google Calendar es un espejo**, no la fuente de verdad. La base de datos siempre gana.
 6. **El token de Google Calendar se cifra** en base de datos. Nunca se expone en el frontend.
-7. **Rate limiting en la API pública** (`/api/[slug]/...`): máximo 30 requests/minuto por IP usando Upstash Redis.
-8. **Cada tenant tiene su slug único.** El slug no se puede cambiar una vez creado.
+7. **Rate limiting en la API pública** (`/api/[slug]/...`): máximo 30 requests/minuto por IP usando Upstash Redis (`lib/redis.ts`).
+8. **Cada tenant tiene su slug único.** El slug no se puede cambiar una vez creado (restricción a nivel de negocio, no de BD).
 9. **Bloqueo optimista:** al crear un booking se verifica disponibilidad dentro de una transacción Prisma para evitar doble reserva en el mismo slot.
-10. **Los jobs de recordatorio se cancelan** si la cita es cancelada antes de ejecutarse. QStash permite cancelar jobs por messageId.
+10. **Los jobs de recordatorio se cancelan** si la cita es cancelada antes de ejecutarse. QStash permite cancelar jobs por `messageId` — guardarlo en `NotificationJob` si se necesita cancelación explícita.
 
 ---
 
@@ -304,10 +313,11 @@ Motivo: {reason}
 ## 9. Seguridad
 
 - Rutas `/admin/*` protegidas con NextAuth. Solo el owner/admin del tenant puede acceder.
-- Los endpoints `/api/jobs/*` validan la firma de QStash antes de ejecutarse.
-- El webhook de pagos valida firma del proveedor.
+- Los endpoints `/api/jobs/*` validan la firma de QStash usando `qstashReceiver.verify()` de `lib/qstash.ts` antes de ejecutarse.
+- El webhook de pagos valida firma HMAC del proveedor en `/api/webhooks/payment/route.ts`.
 - `patient_email` y `patient_phone` se consideran datos sensibles. No se exponen en listados públicos.
 - Toda comunicación sobre HTTPS (garantizado por Vercel).
+- `google_calendar_token` se almacena cifrado. Nunca se serializa en respuestas de API.
 
 ---
 
@@ -328,13 +338,178 @@ Motivo: {reason}
 
 | Decisión | Opción elegida | Razón |
 |----------|---------------|-------|
-| Multi-tenant | Single DB con organization_id | Simplicidad operacional con Neon |
+| Multi-tenant | Single DB con `organization_id` | Simplicidad operacional con Neon |
 | Disponibilidad | Calculada en demanda + cache Redis | Evita tabla de slots precalculados |
 | Jobs asíncronos | Upstash QStash | Ya en el stack, serverless-native |
 | Notificaciones | WhatsApp Business API oficial | Única opción escalable y confiable |
-| ORM | Prisma | Ya instalado, type-safe |
-| Timezone | date-fns-tz | Ya en el stack |
-| IDs de bookings | nanoid | URLs amigables para el paciente |
+| ORM | Prisma 7 | Ya instalado, type-safe |
+| Timezone | `date-fns-tz` | Conversiones UTC ↔ local del tenant |
+| IDs de entidades | `cuid()` vía Prisma `@default(cuid())` | Consistente en todos los modelos |
+| Precio de servicio | `Decimal(10,2)` en Prisma | Evita errores de punto flotante |
+| Índices BD | `organizationId`, `professionalId`, `scheduledAt` | Queries de disponibilidad y listados son los más frecuentes |
+
+---
+
+## 12. Estructura de `lib/`
+
+Todas las utilidades compartidas viven en `lib/`. Ninguna lógica de negocio va directamente en las API routes — las routes solo validan con Zod y delegan a `lib/`.
+
+| Archivo | Responsabilidad |
+|---------|----------------|
+| `lib/prisma.ts` | Singleton del cliente Prisma. Importar siempre desde aquí: `import { prisma } from "@/lib/prisma"` |
+| `lib/availability.ts` | `getAvailableSlots(professionalId, dateStr, organizationId)` — calcula slots libres respetando reglas, bloqueos y reservas existentes. Usa `date-fns-tz` para todas las conversiones. |
+| `lib/notifications.ts` | `enqueueNotification()` — crea un `NotificationJob` en BD. `enqueueBookingConfirmedJobs()` — helper que encola los 4 jobs estándar (WhatsApp confirmación, Email, Calendar, Reminder 24h). |
+| `lib/qstash.ts` | `qstash` — cliente QStash. `qstashReceiver` — verifica firma en `/api/jobs/*`. `publishJob({ path, body, delaySeconds })` — publica un job hacia una ruta interna. |
+| `lib/redis.ts` | Cliente Upstash Redis. Usado para cache de disponibilidad (TTL 60s) y rate limiting en API pública. |
+| `lib/calendar.ts` | Funciones para crear, actualizar y eliminar eventos en Google Calendar del profesional usando el token OAuth almacenado. |
+
+### Patrón de uso en API routes
+
+```ts
+// ✅ Correcto — la route valida y delega
+export async function POST(req: Request) {
+  const body = BookingSchema.parse(await req.json()); // Zod
+  const slots = await getAvailableSlots(...);          // lib/
+  // ...
+}
+
+// ❌ Incorrecto — lógica de negocio dentro de la route
+export async function POST(req: Request) {
+  const rules = await prisma.availabilityRule.findMany(...); // no
+  // cálculo de slots aquí...
+}
+```
+
+---
+
+## 13. Notas del Schema Prisma
+
+> Archivo: [`prisma/schema.prisma`](./prisma/schema.prisma)
+
+- **Todos los IDs** usan `@default(cuid())`. Corto, URL-safe, sin colisiones.
+- **`organization_id` está en todas las tablas** excepto `BookingReschedule` que lo hereda vía `booking_id`. Esto permite queries directas por tenant sin JOINs.
+- **Índices definidos** priorizan los queries más frecuentes:
+  - `[professionalId, dayOfWeek, active]` → cálculo de disponibilidad
+  - `[professionalId, scheduledAt]` → listado de agenda del doctor
+  - `[status, scheduledFor]` → jobs pendientes de procesar
+  - `[patientPhone]` → búsqueda de reservas desde WhatsApp (futuro)
+- **`price` es `Decimal(10,2)`** — nunca usar `Float` para dinero.
+- **`onDelete: Cascade`** en relaciones hijo → padre para mantener integridad al eliminar una organización o profesional.
+- **`onDelete: Restrict`** en `Booking → Professional` y `Booking → Service` para evitar borrar un profesional con reservas activas.
+- El output del cliente Prisma está en `app/generated/prisma` (ver `prisma.config.ts`).
+
+---
+
+## 14. Onboarding: Registrar un nuevo tenant
+
+Pasos para dar de alta una nueva organización (doctor/clínica) en el sistema:
+
+```ts
+// 1. Crear la organización
+const org = await prisma.organization.create({
+  data: {
+    slug: "clinica-dr-perez",          // único, inmutable
+    name: "Clínica Dr. Pérez",
+    timezone: "America/Guayaquil",
+    whatsappEnabled: true,
+    googleCalendarEnabled: true,
+  },
+});
+
+// 2. Crear el profesional
+const doctor = await prisma.professional.create({
+  data: {
+    organizationId: org.id,
+    name: "Dr. Carlos Pérez",
+    email: "dr.perez@clinica.com",
+    phone: "+593987654321",
+    specialty: "Medicina General",
+  },
+});
+
+// 3. Crear los servicios
+await prisma.service.create({
+  data: {
+    organizationId: org.id,
+    professionalId: doctor.id,
+    name: "Consulta General",
+    durationMinutes: 30,
+    price: 25.00,
+    currency: "USD",
+  },
+});
+
+// 4. Configurar horario semanal (Lunes a Viernes, 8am-5pm, slots de 30min)
+const weekdays = [1, 2, 3, 4, 5];
+await Promise.all(
+  weekdays.map((day) =>
+    prisma.availabilityRule.create({
+      data: {
+        organizationId: org.id,
+        professionalId: doctor.id,
+        dayOfWeek: day,
+        startTime: "08:00",
+        endTime: "17:00",
+        slotDurationMinutes: 30,
+      },
+    })
+  )
+);
+```
+
+Ver [`prisma/seed.ts`](./prisma/seed.ts) para un ejemplo completo ejecutable con `npx prisma db seed`.
+
+---
+
+## 15. Convenciones de Código
+
+### Estructura de archivos
+- **Lógica de negocio** → siempre en `lib/`. Las API routes solo validan y delegan.
+- **Validación de inputs** → Zod en cada route. Definir schemas en el mismo archivo o en `lib/schemas/`.
+- **Tipos** → usar los tipos generados por Prisma desde `@/app/generated/prisma`. No redefinir tipos manualmente si Prisma ya los tiene.
+
+### Naming
+| Elemento | Convención | Ejemplo |
+|----------|-----------|---------|
+| Funciones en `lib/` | camelCase, verbo + sustantivo | `getAvailableSlots`, `enqueueNotification` |
+| API routes | kebab-case en carpetas | `/api/jobs/notify-whatsapp` |
+| Variables de entorno | SCREAMING_SNAKE_CASE | `QSTASH_TOKEN` |
+| Modelos Prisma | PascalCase | `Organization`, `Booking` |
+| Campos en BD | snake_case (via `@map`) | `organization_id`, `scheduled_at` |
+| Campos en TypeScript | camelCase (Prisma los mapea) | `organizationId`, `scheduledAt` |
+
+### Jobs de QStash
+Cada handler en `/api/jobs/*` debe:
+1. Verificar firma con `qstashReceiver.verify()` — si falla → `403`.
+2. Parsear el body con Zod.
+3. Ejecutar la acción (enviar WhatsApp, sincronizar Calendar, etc.).
+4. Actualizar `NotificationJob.status` a `SENT` o `FAILED` + incrementar `attempts`.
+5. En caso de error → lanzar excepción para que QStash reintente automáticamente.
+
+```ts
+// Patrón estándar para /api/jobs/*/route.ts
+export async function POST(req: Request) {
+  const isValid = await qstashReceiver.verify({ ... });
+  if (!isValid) return new Response("Unauthorized", { status: 403 });
+
+  const body = JobSchema.parse(await req.json());
+
+  try {
+    await doTheWork(body);
+    await prisma.notificationJob.update({
+      where: { id: body.jobId },
+      data: { status: "SENT", attempts: { increment: 1 } },
+    });
+    return new Response("ok");
+  } catch (err) {
+    await prisma.notificationJob.update({
+      where: { id: body.jobId },
+      data: { status: "FAILED", attempts: { increment: 1 }, lastError: String(err) },
+    });
+    throw err; // QStash reintenta
+  }
+}
+```
 
 ---
 
