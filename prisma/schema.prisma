@@ -1,18 +1,136 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
 generator client {
-  provider = "prisma-client"
-  output   = "../app/generated/prisma"
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// =============================================================================
+// ORGANIZACIÓN (tenant raíz)
+// =============================================================================
+model Organization {
+  id                    String   @id @default(cuid())
+  name                  String
+  slug                  String   @unique
+  logoUrl               String?  @map("logo_url")
+  phone                 String?
+  email                 String?
+  address               String?
+  timezone              String   @default("America/Guayaquil")
+  whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
+  googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  professionals    Professional[]
+  services         Service[]
+  bookings         Booking[]
+  availability     AvailabilityRule[]
+  notificationJobs NotificationJob[]
+
+  @@map("organizations")
+}
+
+// =============================================================================
+// PROFESIONAL (usuario admin del panel)
+// passwordHash: hash bcrypt de la contraseña.
+//   null  = solo puede hacer login vía OAuth (Google)
+//   !null = puede hacer login con email + password
+// =============================================================================
+model Professional {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  email          String?  @unique
+  phone          String?
+  avatarUrl      String?  @map("avatar_url")
+  specialty      String?
+  bio            String?
+  active         Boolean  @default(true)
+  passwordHash   String?  @map("password_hash") // bcrypt hash — null = solo OAuth
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bookings          Booking[]
+  availabilityRules AvailabilityRule[]
+
+  @@index([organizationId])
+  @@map("professionals")
+}
+
+// =============================================================================
+// SERVICIO
+// =============================================================================
+model Service {
+  id              String   @id @default(cuid())
+  organizationId  String   @map("organization_id")
+  name            String
+  description     String?
+  durationMinutes Int      @default(30) @map("duration_minutes")
+  price           Decimal? @db.Decimal(10, 2)
+  currency        String   @default("USD")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+
+  @@index([organizationId])
+  @@map("services")
+}
+
+// =============================================================================
+// RESERVA
+// Status lifecycle:
+//   PENDING   → booking creado, pago pendiente (servicios con precio)
+//   CONFIRMED → pago completado o servicio gratuito
+//   CANCELLED → cancelado por paciente o admin
+//   COMPLETED → cita realizada
+//   NO_SHOW   → paciente no se presentó
+// =============================================================================
+model Booking {
+  id              String        @id @default(cuid())
+  organizationId  String        @map("organization_id")
+  professionalId  String        @map("professional_id")
+  serviceId       String        @map("service_id")
+  patientName     String        @map("patient_name")
+  patientEmail    String?       @map("patient_email")
+  patientPhone    String        @map("patient_phone")
+  scheduledAt     DateTime      @map("scheduled_at")
+  durationMinutes Int           @default(30) @map("duration_minutes")
+  status          BookingStatus @default(PENDING)
+  paymentStatus   PaymentStatus @default(UNPAID) @map("payment_status")
+  paymentId       String?       @map("payment_id") // ID de transacción PayPal
+  notes           String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  professional     Professional     @relation(fields: [professionalId], references: [id])
+  service          Service          @relation(fields: [serviceId], references: [id])
+  notificationJobs NotificationJob[]
+
+  @@index([organizationId])
+  @@index([professionalId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@map("bookings")
+}
+
 enum BookingStatus {
   PENDING
   CONFIRMED
   CANCELLED
-  RESCHEDULED
   COMPLETED
+  NO_SHOW
 }
 
 enum PaymentStatus {
@@ -21,17 +139,39 @@ enum PaymentStatus {
   REFUNDED
 }
 
-enum NotificationType {
-  BOOKING_CONFIRMED
-  BOOKING_CANCELLED
-  BOOKING_RESCHEDULED
-  REMINDER_24H
+// =============================================================================
+// REGLA DE DISPONIBILIDAD
+// =============================================================================
+model AvailabilityRule {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  professionalId String   @map("professional_id")
+  dayOfWeek      Int      @map("day_of_week") // 0=Domingo … 6=Sábado
+  startTime      String   @map("start_time") // HH:mm
+  endTime        String   @map("end_time")   // HH:mm
+  slotMinutes    Int      @default(30) @map("slot_minutes")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@index([professionalId])
+  @@map("availability_rules")
 }
 
-enum NotificationChannel {
-  WHATSAPP
-  EMAIL
-  CALENDAR
+// =============================================================================
+// JOB DE NOTIFICACIÓN
+// IMPORTANTE: los nombres de campos correctos son:
+//   lastError  (NO "error")
+//   attempts   (NO "retries")
+// =============================================================================
+enum NotificationType {
+  BOOKING_CONFIRMED
+  BOOKING_RESCHEDULED
+  BOOKING_CANCELLED
+  REMINDER_24H
 }
 
 enum NotificationStatus {
@@ -40,179 +180,24 @@ enum NotificationStatus {
   FAILED
 }
 
-model Organization {
-  id                    String   @id @default(cuid())
-  slug                  String   @unique
-  name                  String
-  logoUrl               String?  @map("logo_url")
-  phoneWhatsapp         String?  @map("phone_whatsapp")
-  timezone              String   @default("America/Guayaquil")
-  googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
-  whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
-
-  professionals    Professional[]
-  services         Service[]
-  bookings         Booking[]
-  notificationJobs NotificationJob[]
-
-  @@map("organizations")
-}
-
-model Professional {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  name                String
-  email               String?
-  phone               String?
-  specialty           String?
-  googleCalendarToken String?  @map("google_calendar_token")
-  googleCalendarId    String?  @map("google_calendar_id")
-  active              Boolean  @default(true)
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
-
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  services          Service[]
-  availabilityRules AvailabilityRule[]
-  blackoutDates     BlackoutDate[]
-  bookings          Booking[]
-
-  @@index([organizationId])
-  @@index([organizationId, active])
-  @@map("professionals")
-}
-
-model Service {
-  id              String   @id @default(cuid())
-  organizationId  String   @map("organization_id")
-  professionalId  String   @map("professional_id")
-  name            String
-  description     String?
-  durationMinutes Int      @map("duration_minutes")
-  price           Decimal  @db.Decimal(10, 2)
-  currency        String   @default("USD")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-  bookings     Booking[]
-
-  @@index([organizationId])
-  @@index([professionalId])
-  @@index([organizationId, active])
-  @@map("services")
-}
-
-model AvailabilityRule {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  professionalId      String   @map("professional_id")
-  dayOfWeek           Int      @map("day_of_week")
-  startTime           String   @map("start_time")
-  endTime             String   @map("end_time")
-  slotDurationMinutes Int      @map("slot_duration_minutes")
-  active              Boolean  @default(true)
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
-
-  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-  @@index([professionalId])
-  @@index([professionalId, dayOfWeek, active])
-  @@map("availability_rules")
-}
-
-model BlackoutDate {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  professionalId String   @map("professional_id")
-  date           DateTime
-  startTime      String?  @map("start_time")
-  endTime        String?  @map("end_time")
-  reason         String?
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-
-  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-  @@index([professionalId])
-  @@index([professionalId, date])
-  @@map("blackout_dates")
-}
-
-model Booking {
-  id                 String        @id @default(cuid())
-  organizationId     String        @map("organization_id")
-  professionalId     String        @map("professional_id")
-  serviceId          String        @map("service_id")
-  patientName        String        @map("patient_name")
-  patientEmail       String?       @map("patient_email")
-  patientPhone       String        @map("patient_phone")
-  scheduledAt        DateTime      @map("scheduled_at")
-  durationMinutes    Int           @map("duration_minutes")
-  status             BookingStatus @default(PENDING)
-  paymentStatus      PaymentStatus @default(UNPAID) @map("payment_status")
-  paymentId          String?       @map("payment_id")
-  googleEventId      String?       @map("google_event_id")
-  cancellationReason String?       @map("cancellation_reason")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
-
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  professional     Professional        @relation(fields: [professionalId], references: [id], onDelete: Restrict)
-  service          Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
-  reschedules      BookingReschedule[]
-  notificationJobs NotificationJob[]
-
-  @@index([organizationId])
-  @@index([professionalId])
-  @@index([serviceId])
-  @@index([organizationId, scheduledAt])
-  @@index([professionalId, scheduledAt])
-  @@index([patientPhone])
-  @@map("bookings")
-}
-
-model BookingReschedule {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  bookingId           String   @map("booking_id")
-  previousScheduledAt DateTime @map("previous_scheduled_at")
-  newScheduledAt      DateTime @map("new_scheduled_at")
-  reason              String?
-  createdAt           DateTime @default(now()) @map("created_at")
-
-  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-  @@index([bookingId])
-  @@map("booking_reschedules")
-}
-
 model NotificationJob {
-  id             String              @id @default(cuid())
-  organizationId String              @map("organization_id")
-  bookingId      String              @map("booking_id")
+  id             String             @id @default(cuid())
+  organizationId String             @map("organization_id")
+  bookingId      String             @map("booking_id")
   type           NotificationType
-  channel        NotificationChannel
-  status         NotificationStatus  @default(PENDING)
-  scheduledFor   DateTime?           @map("scheduled_for")
-  attempts       Int                 @default(0)
-  lastError      String?             @map("last_error")
-  createdAt      DateTime            @default(now()) @map("created_at")
-  updatedAt      DateTime            @updatedAt @map("updated_at")
+  channel        String             // "email" | "whatsapp" | "calendar"
+  status         NotificationStatus @default(PENDING)
+  attempts       Int                @default(0)  // campo correcto (no "retries")
+  lastError      String?            @map("last_error") // campo correcto (no "error")
+  scheduledFor   DateTime?          @map("scheduled_for")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  @@index([organizationId])
   @@index([bookingId])
-  @@index([status, scheduledFor])
+  @@index([status])
+  @@index([organizationId])
   @@map("notification_jobs")
 }
