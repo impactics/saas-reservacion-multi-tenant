@@ -53,14 +53,15 @@ export async function POST(req: NextRequest) {
   if (!message) {
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", error: `Tipo desconocido: ${job.type}` },
+      data: {
+        status: "FAILED",
+        lastError: `Tipo desconocido: ${job.type}`, // campo correcto del schema
+      },
     });
     return NextResponse.json({ error: "Tipo desconocido" }, { status: 400 });
   }
 
   try {
-    // Llamar a la API de WhatsApp (Twilio, Meta API, etc.)
-    // La URL y credenciales se configuran por variables de entorno
     const whatsappApiUrl = process.env.WHATSAPP_API_URL;
     const whatsappToken = process.env.WHATSAPP_API_TOKEN;
     const fromNumber = process.env.WHATSAPP_FROM_NUMBER;
@@ -70,10 +71,15 @@ export async function POST(req: NextRequest) {
     }
 
     const phone = booking.patientPhone.replace(/[^0-9]/g, "");
-    const toNumber = phone.startsWith("593") ? phone : `593${phone.replace(/^0/, "")}`;
+    const toNumber = phone.startsWith("593")
+      ? phone
+      : `593${phone.replace(/^0/, "")}`;
 
+    // Timeout de 10s para evitar que la función serverless cuelgue
+    // si la API de Meta no responde
     const res = await fetch(whatsappApiUrl, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${whatsappToken}`,
@@ -91,22 +97,28 @@ export async function POST(req: NextRequest) {
       throw new Error(`WhatsApp API error ${res.status}: ${errText}`);
     }
 
+    // C-06 fix: usar los nombres correctos de campos del schema Prisma
+    // Schema define: lastError (no "error"), attempts (no "retries")
+    // El campo sentAt no existe en el schema — se omite
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "SENT", sentAt: new Date() },
+      data: { status: "SENT" },
     });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+
+    // C-06 fix: campos correctos del schema
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
       data: {
         status: "FAILED",
-        error,
-        retries: { increment: 1 },
+        lastError: error,          // campo correcto (no "error")
+        attempts: { increment: 1 }, // campo correcto (no "retries")
       },
     });
+
     console.error("[notify-whatsapp] error", error);
     // Retornar 500 para que QStash reintente automáticamente
     return NextResponse.json({ error }, { status: 500 });
