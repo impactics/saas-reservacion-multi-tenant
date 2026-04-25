@@ -13,6 +13,15 @@ import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
+import bcrypt from "bcryptjs";
+
+// Validación temprana de secret — falla en arranque si no está definido
+if (!process.env.NEXTAUTH_SECRET) {
+  throw new Error(
+    "[auth] NEXTAUTH_SECRET no está definido. " +
+      "Generar con: openssl rand -base64 32"
+  );
+}
 
 // Extend session types
 declare module "next-auth" {
@@ -54,18 +63,29 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        // Buscar admin en la tabla de professionals por email
-        // (puedes crear una tabla Admin separada si necesitas más control)
+        // Buscar profesional activo por email
         const prof = await prisma.professional.findFirst({
           where: { email: credentials.email, active: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            organizationId: true,
+            passwordHash: true,
+          },
           include: { organization: true },
         });
         if (!prof) return null;
 
-        // NOTA: En producción usar bcrypt para comparar contraseñas hasheadas.
-        // Aquí dejamos un placeholder para que el equipo lo complete.
-        // const valid = await bcrypt.compare(credentials.password, prof.passwordHash);
-        // if (!valid) return null;
+        // Sin hash registrado → no se permite login por credenciales
+        if (!prof.passwordHash) return null;
+
+        // Verificar contraseña con bcrypt (tiempo constante — evita timing attacks)
+        const valid = await bcrypt.compare(
+          credentials.password,
+          prof.passwordHash
+        );
+        if (!valid) return null;
 
         return {
           id: prof.id,
