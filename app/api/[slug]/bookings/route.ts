@@ -38,6 +38,7 @@ export async function POST(
       );
     }
 
+    // Validar servicio dentro de esta org (evita IDOR entre orgs)
     const service = await prisma.service.findFirst({
       where: {
         id: parsed.data.serviceId,
@@ -52,16 +53,39 @@ export async function POST(
       );
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // IDOR fix: verificar que el profesional pertenece a esta organización.
+    // Sin este check, un atacante podría bookear con professionalId de
+    // otra org si conoce el ID.
+    // ────────────────────────────────────────────────────────────────
+    const professional = await prisma.professional.findFirst({
+      where: {
+        id: parsed.data.professionalId,
+        organizationId: org.id,
+        active: true,
+      },
+      select: { id: true },
+    });
+    if (!professional) {
+      return NextResponse.json(
+        { error: "Profesional no encontrado" },
+        { status: 404 }
+      );
+    }
+
     const scheduledAt = new Date(parsed.data.scheduledAt);
+    const slotEnd = new Date(
+      scheduledAt.getTime() + service.durationMinutes * 60_000
+    );
 
     // Verificar que el slot sigue disponible (doble check)
     const conflict = await prisma.booking.findFirst({
       where: {
-        professionalId: parsed.data.professionalId,
+        professionalId: professional.id,
         status: { in: ["PENDING", "CONFIRMED"] },
         scheduledAt: {
           gte: scheduledAt,
-          lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60000),
+          lt: slotEnd,
         },
       },
     });
@@ -72,29 +96,40 @@ export async function POST(
       );
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // C-04 fix: si el servicio tiene precio, el booking nace en PENDING
+    // y sólo pasa a CONFIRMED cuando el webhook de pago lo confirma.
+    // Servicios gratuitos (price = 0) se confirman directamente.
+    // ────────────────────────────────────────────────────────────────
+    const isFree = !service.price || Number(service.price) === 0;
+    const initialStatus = isFree ? "CONFIRMED" : "PENDING";
+
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
-        professionalId: parsed.data.professionalId,
+        professionalId: professional.id,
         serviceId: service.id,
         patientName: parsed.data.patientName,
         patientEmail: parsed.data.patientEmail,
         patientPhone: parsed.data.patientPhone,
         scheduledAt,
         durationMinutes: service.durationMinutes,
-        status: "CONFIRMED",
+        status: initialStatus,
         paymentStatus: "UNPAID",
       },
     });
 
-    // Encolar notificaciones de forma asíncrona (no bloquea la respuesta)
-    enqueueBookingConfirmedJobs({
-      organizationId: org.id,
-      bookingId: booking.id,
-      scheduledAt,
-      whatsappEnabled: org.whatsappEnabled,
-      calendarEnabled: org.googleCalendarEnabled,
-    }).catch((e) => console.error("[notifications] enqueue error", e));
+    // Encolar notificaciones solo si el booking ya está confirmado (servicio gratuito)
+    // Para servicios de pago, las notificaciones se encolan desde el webhook de pago
+    if (isFree) {
+      enqueueBookingConfirmedJobs({
+        organizationId: org.id,
+        bookingId: booking.id,
+        scheduledAt,
+        whatsappEnabled: org.whatsappEnabled,
+        calendarEnabled: org.googleCalendarEnabled,
+      }).catch((e) => console.error("[notifications] enqueue error", e));
+    }
 
     return NextResponse.json({ booking }, { status: 201 });
   } catch (err) {
