@@ -53,7 +53,6 @@ model Organization {
   whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
-
   professionals    Professional[]
   services         Service[]
   bookings         Booking[]
