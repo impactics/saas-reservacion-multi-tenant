@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import type { NotificationChannel, NotificationType } from "../app/generated/prisma";
+import type { NotificationChannel, NotificationType } from "@/app/generated/prisma/client";
 
 /**
  * Encola un NotificationJob en BD.
