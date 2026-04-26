@@ -13,6 +13,7 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@upstash/qstash": "^2.10.1",
     "@upstash/redis": "^1.37.0",
