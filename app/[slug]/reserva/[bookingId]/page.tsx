@@ -4,6 +4,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
 import { es } from "date-fns/locale";
+import { CancelButton } from "./cancel-button";
 
 interface Props {
   params: Promise<{ slug: string; bookingId: string }>;
@@ -102,18 +103,7 @@ export default async function ReservaDetailPage({ params }: Props) {
             >
               Reagendar cita
             </Link>
-            {/* Cancelar — formulario con fetch client-side; se usa un form action simple */}
-            <form action={`/api/${slug}/bookings/${booking.id}/cancel`} method="POST">
-              <button
-                type="submit"
-                className="w-full border border-red-300 text-red-600 hover:bg-red-50 font-medium py-3 rounded-lg transition-colors"
-                onClick={(e) => {
-                  if (!confirm("\u00bfSeguro que deseas cancelar tu cita?")) e.preventDefault();
-                }}
-              >
-                Cancelar cita
-              </button>
-            </form>
+            <CancelButton slug={slug} bookingId={booking.id} />
           </div>
         )}
       </div>
