@@ -1,226 +1,142 @@
 /**
  * lib/patient-auth.ts
  *
- * Autenticación ligera para pacientes mediante OTP por WhatsApp.
- *
+ * Autenticación ligera de pacientes via OTP por WhatsApp.
  * Flujo:
- *   1. POST /api/[slug]/auth/request-otp  → requestOTP()
- *      - Busca o crea el Patient en la BD
- *      - Genera un código de 6 dígitos
- *      - Guarda el código en PatientOTP con expiresAt = now + 10 min
- *      - Envía el código por WhatsApp al paciente
+ *   1. POST /api/{slug}/auth/otp  { action: "request", phone }
+ *      → genera OTP de 6 dígitos, lo guarda en Redis 10 min, envía por WhatsApp
+ *   2. POST /api/{slug}/auth/otp  { action: "verify", phone, code }
+ *      → valida OTP, crea o recupera Patient, devuelve { patientToken }
  *
- *   2. POST /api/[slug]/auth/verify-otp   → verifyOTP()
- *      - Valida el código contra PatientOTP
- *      - Marca el OTP como usado
- *      - Devuelve un JWT firmado con patientId + organizationId
- *
- *   3. El JWT viaja en cookie HttpOnly "patient_token"
- *      - verifyPatientToken() lo valida en cada request protegido
- *
- * Variables de entorno:
- *   PATIENT_JWT_SECRET  - secreto para firmar el JWT del paciente
+ * El patientToken es un JWT firmado con NEXTAUTH_SECRET que se almacena
+ * en una cookie httpOnly "patient_token" (30 días).
+ * Cada ruta protegida del paciente llama a verifyPatientToken() para leerlo.
  */
 
-import { prisma } from "@/lib/prisma";
+import { redis, rateLimit } from "@/lib/redis";
 import { sendWhatsAppText } from "@/lib/whatsapp";
+import { prisma } from "@/lib/prisma";
 import { SignJWT, jwtVerify } from "jose";
 
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.PATIENT_JWT_SECRET ?? "CHANGE_ME_patient_secret_32chars"
+  process.env.NEXTAUTH_SECRET ?? "dev-secret-change-in-prod"
 );
-const JWT_EXPIRES = "30d"; // el paciente permanece logueado 30 días
-const OTP_TTL_MIN = 10;    // el OTP expira en 10 minutos
 
-// ─────────────────────────────────────────────
-// TIPOS
-// ─────────────────────────────────────────────
+const OTP_TTL_SECONDS = 600; // 10 minutos
+const OTP_KEY = (orgId: string, phone: string) =>
+  `otp:${orgId}:${phone.replace(/\D/g, "")}`;
 
-export interface PatientTokenPayload {
-  patientId:      string;
-  organizationId: string;
-  phone:          string;
-}
+// ─────────────────────────────────────────────────────────────
+// Generar y enviar OTP
+// ─────────────────────────────────────────────────────────────
 
-export interface RequestOTPResult {
-  success: boolean;
-  created: boolean;  // true si el paciente era nuevo
-  patientId: string;
-}
-
-export interface VerifyOTPResult {
-  success: boolean;
-  token?: string;    // JWT si la verificación fue correcta
-  patientId?: string;
-  error?: "invalid" | "expired" | "already_used";
-}
-
-// ─────────────────────────────────────────────
-// HELPERS INTERNOS
-// ─────────────────────────────────────────────
-
-/** Genera un código numérico de 6 dígitos como string */
-function generateCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-/** Normaliza teléfono a E.164 sin símbolos: "+593 99..." → "593999..." */
-export function normalizePhone(raw: string): string {
-  return raw.replace(/[^\d]/g, "");
-}
-
-// ─────────────────────────────────────────────
-// REQUEST OTP
-// Crea o reutiliza el Patient y envía el código por WhatsApp
-// ─────────────────────────────────────────────
-
-export async function requestOTP({
-  organizationId,
+export async function requestOtp({
+  orgId,
+  orgName,
   phone,
-  name,
-  email,
-  organizationName,
 }: {
-  organizationId: string;
+  orgId: string;
+  orgName: string;
   phone: string;
-  name: string;
-  email?: string;
-  organizationName: string;
-}): Promise<RequestOTPResult> {
-  const normalizedPhone = normalizePhone(phone);
-
-  // Busca o crea el paciente
-  let created = false;
-  let patient = await prisma.patient.findUnique({
-    where: { organizationId_phone: { organizationId, phone: normalizedPhone } },
+}): Promise<{ sent: boolean; error?: string }> {
+  // Rate limit: máx 3 OTPs por teléfono cada 10 minutos
+  const rl = await rateLimit({
+    key: `otp_req:${phone.replace(/\D/g, "")}`,
+    maxRequests: 3,
+    windowSeconds: OTP_TTL_SECONDS,
   });
-
-  if (!patient) {
-    patient = await prisma.patient.create({
-      data: { organizationId, phone: normalizedPhone, name, email },
-    });
-    created = true;
-  } else if (name && patient.name !== name) {
-    // Actualiza el nombre si cambió
-    patient = await prisma.patient.update({
-      where: { id: patient.id },
-      data: { name, ...(email ? { email } : {}) },
-    });
+  if (!rl.allowed) {
+    return { sent: false, error: "Demasiados intentos. Espera 10 minutos." };
   }
 
-  // Genera código y guarda en DB
-  const code      = generateCode();
-  const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
+  const code = String(Math.floor(100000 + Math.random() * 900000)); // 6 dígitos
+  await redis.set(OTP_KEY(orgId, phone), code, { ex: OTP_TTL_SECONDS });
 
-  await prisma.patientOTP.create({
-    data: { patientId: patient.id, code, expiresAt },
-  });
+  const message =
+    `🔐 *${orgName}* — Código de verificación\n\n` +
+    `Tu código es: *${code}*\n\n` +
+    `Válido por 10 minutos. No lo compartas con nadie.`;
 
-  // Envía por WhatsApp
-  const msg =
-    `🔐 *Código de verificación*\n\n` +
-    `Hola ${name}, tu código para acceder a tus citas en *${organizationName}* es:\n\n` +
-    `*${code}*\n\n` +
-    `Expira en ${OTP_TTL_MIN} minutos. Si no lo solicitaste, ignóralo.`;
-
-  // Usamos el teléfono original con "+" para el API de Meta
-  await sendWhatsAppText("+" + normalizedPhone, msg);
-
-  return { success: true, created, patientId: patient.id };
+  await sendWhatsAppText(phone, message);
+  return { sent: true };
 }
 
-// ─────────────────────────────────────────────
-// VERIFY OTP
-// Valida el código y devuelve un JWT firmado
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Verificar OTP y devolver Patient + token JWT
+// ─────────────────────────────────────────────────────────────
 
-export async function verifyOTP({
-  organizationId,
+export async function verifyOtp({
+  orgId,
   phone,
   code,
+  name,
 }: {
-  organizationId: string;
+  orgId: string;
   phone: string;
   code: string;
-}): Promise<VerifyOTPResult> {
-  const normalizedPhone = normalizePhone(phone);
+  name?: string;
+}): Promise<{ patient: { id: string; phone: string; name: string | null }; token: string } | { error: string }> {
+  // Rate limit: máx 5 intentos de verificación por teléfono cada 10 min
+  const rl = await rateLimit({
+    key: `otp_verify:${phone.replace(/\D/g, "")}`,
+    maxRequests: 5,
+    windowSeconds: OTP_TTL_SECONDS,
+  });
+  if (!rl.allowed) {
+    return { error: "Demasiados intentos fallidos. Solicita un nuevo código." };
+  }
 
-  const patient = await prisma.patient.findUnique({
-    where: { organizationId_phone: { organizationId, phone: normalizedPhone } },
+  const stored = await redis.get<string>(OTP_KEY(orgId, phone));
+  if (!stored || stored !== code.trim()) {
+    return { error: "Código incorrecto o expirado." };
+  }
+
+  // Invalidar OTP tras uso exitoso
+  await redis.del(OTP_KEY(orgId, phone));
+
+  // Crear o recuperar paciente
+  const cleanPhone = "+" + phone.replace(/\D/g, "");
+  const patient = await prisma.patient.upsert({
+    where: { organizationId_phone: { organizationId: orgId, phone: cleanPhone } },
+    create: { organizationId: orgId, phone: cleanPhone, name: name ?? null },
+    update: { ...(name ? { name } : {}) },
   });
 
-  if (!patient) return { success: false, error: "invalid" };
-
-  // Busca el OTP más reciente no usado para este paciente
-  const otp = await prisma.patientOTP.findFirst({
-    where: { patientId: patient.id, usedAt: null },
-    orderBy: { createdAt: "desc" },
-  });
-
-  if (!otp)                        return { success: false, error: "invalid" };
-  if (otp.code !== code)           return { success: false, error: "invalid" };
-  if (otp.expiresAt < new Date())  return { success: false, error: "expired" };
-
-  // Marca como usado
-  await prisma.patientOTP.update({
-    where: { id: otp.id },
-    data:  { usedAt: new Date() },
-  });
-
-  // Genera JWT
-  const token = await createPatientToken({
-    patientId:      patient.id,
-    organizationId: patient.organizationId,
-    phone:          patient.phone,
-  });
-
-  return { success: true, token, patientId: patient.id };
-}
-
-// ─────────────────────────────────────────────
-// JWT HELPERS
-// ─────────────────────────────────────────────
-
-export async function createPatientToken(
-  payload: PatientTokenPayload
-): Promise<string> {
-  return new SignJWT(payload)
+  // Firmar JWT válido 30 días
+  const token = await new SignJWT({ patientId: patient.id, orgId })
     .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(JWT_EXPIRES)
+    .setExpirationTime("30d")
     .sign(JWT_SECRET);
+
+  return { patient, token };
 }
+
+// ─────────────────────────────────────────────────────────────
+// Verificar token JWT del paciente (usar en rutas protegidas)
+// ─────────────────────────────────────────────────────────────
 
 export async function verifyPatientToken(
   token: string
-): Promise<PatientTokenPayload | null> {
+): Promise<{ patientId: string; orgId: string } | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as unknown as PatientTokenPayload;
+    return {
+      patientId: payload.patientId as string,
+      orgId: payload.orgId as string,
+    };
   } catch {
     return null;
   }
 }
 
-/**
- * Extrae y verifica el token del paciente desde los headers de la request.
- * Busca en la cookie "patient_token" primero, luego en Authorization Bearer.
- */
-export async function getPatientFromRequest(
-  request: Request
-): Promise<PatientTokenPayload | null> {
-  // 1. Cookie HttpOnly
-  const cookieHeader = request.headers.get("cookie") ?? "";
+// ─────────────────────────────────────────────────────────────
+// Helper: leer token desde cookie de la request
+// ─────────────────────────────────────────────────────────────
+
+export function getPatientTokenFromCookie(
+  cookieHeader: string | null
+): string | null {
+  if (!cookieHeader) return null;
   const match = cookieHeader.match(/(?:^|;\s*)patient_token=([^;]+)/);
-  if (match?.[1]) {
-    return verifyPatientToken(decodeURIComponent(match[1]));
-  }
-
-  // 2. Authorization: Bearer <token>
-  const auth = request.headers.get("authorization") ?? "";
-  if (auth.startsWith("Bearer ")) {
-    return verifyPatientToken(auth.slice(7));
-  }
-
-  return null;
+  return match ? decodeURIComponent(match[1]) : null;
 }
