@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -62,64 +63,117 @@ const NAV = [
   },
 ];
 
+function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  return (
+    <nav className="flex-1 flex flex-col gap-0.5 p-3">
+      {NAV.map((item) => {
+        const isActive = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            onClick={onNavigate}
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              isActive
+                ? "bg-teal-50 text-teal-700"
+                : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+            }`}
+          >
+            <span className={isActive ? "text-teal-600" : "text-gray-400"}>{item.icon}</span>
+            {item.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function UserFooter({ user, onNavigate }: { user: Session["user"]; onNavigate?: () => void }) {
+  return (
+    <div className="p-3 border-t border-gray-100">
+      <div className="flex items-center gap-3 px-3 py-2 mb-1">
+        {user?.image ? (
+          <img src={user.image} alt={user.name ?? ""} className="w-7 h-7 rounded-full" />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-700">
+            {(user?.name ?? "A")[0].toUpperCase()}
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-gray-800 truncate">{user?.name ?? "Admin"}</div>
+          <div className="text-xs text-gray-400 truncate">{user?.email}</div>
+        </div>
+      </div>
+      <button
+        onClick={() => { onNavigate?.(); signOut({ callbackUrl: "/login" }); }}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
+        Cerrar sesión
+      </button>
+    </div>
+  );
+}
+
 export default function AdminSidebar({ user }: { user: Session["user"] }) {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
 
   return (
-    <aside className="hidden lg:flex flex-col w-56 shrink-0 min-h-screen bg-white border-r border-gray-200">
-      {/* Logo */}
-      <div className="px-5 py-5 border-b border-gray-100">
+    <>
+      {/* ── Mobile top bar ── */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-white border-b border-gray-200 flex items-center justify-between px-4 h-14">
         <span className="text-base font-bold text-gray-900">Admin</span>
-      </div>
-
-      {/* Nav */}
-      <nav className="flex-1 flex flex-col gap-0.5 p-3">
-        {NAV.map((item) => {
-          const isActive = item.exact ? pathname === item.href : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive
-                  ? "bg-teal-50 text-teal-700"
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-              }`}
-            >
-              <span className={isActive ? "text-teal-600" : "text-gray-400"}>{item.icon}</span>
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* User + logout */}
-      <div className="p-3 border-t border-gray-100">
-        <div className="flex items-center gap-3 px-3 py-2 mb-1">
-          {user?.image ? (
-            <img src={user.image} alt={user.name ?? ""} className="w-7 h-7 rounded-full" />
-          ) : (
-            <div className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-700">
-              {(user?.name ?? "A")[0].toUpperCase()}
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-gray-800 truncate">{user?.name ?? "Admin"}</div>
-            <div className="text-xs text-gray-400 truncate">{user?.email}</div>
-          </div>
-        </div>
         <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          onClick={() => setOpen(true)}
+          className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+          aria-label="Abrir menú"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-            <polyline points="16 17 21 12 16 7" />
-            <line x1="21" y1="12" x2="9" y2="12" />
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
-          Cerrar sesión
         </button>
       </div>
-    </aside>
+
+      {/* ── Mobile drawer overlay ── */}
+      {open && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/40"
+          onClick={() => setOpen(false)}
+        />
+      )}
+
+      {/* ── Mobile drawer ── */}
+      <div className={`lg:hidden fixed top-0 left-0 bottom-0 z-50 w-64 bg-white flex flex-col shadow-xl transition-transform duration-200 ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}>
+        <div className="px-5 py-5 border-b border-gray-100 flex items-center justify-between">
+          <span className="text-base font-bold text-gray-900">Admin</span>
+          <button onClick={() => setOpen(false)} className="p-1 rounded text-gray-400 hover:text-gray-700">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <NavLinks pathname={pathname} onNavigate={() => setOpen(false)} />
+        <UserFooter user={user} onNavigate={() => setOpen(false)} />
+      </div>
+
+      {/* ── Desktop sidebar ── */}
+      <aside className="hidden lg:flex flex-col w-56 shrink-0 min-h-screen bg-white border-r border-gray-200">
+        <div className="px-5 py-5 border-b border-gray-100">
+          <span className="text-base font-bold text-gray-900">Admin</span>
+        </div>
+        <NavLinks pathname={pathname} />
+        <UserFooter user={user} />
+      </aside>
+    </>
   );
 }
