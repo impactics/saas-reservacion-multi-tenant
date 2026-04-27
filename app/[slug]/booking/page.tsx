@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import PhoneInput from "@/components/PhoneInput";
 
 interface Service {
   id: string;
@@ -175,14 +176,6 @@ export default function BookingPage() {
               </div>
             )}
 
-            {professionals.length === 1 && !selectedProfessional && (
-              <script dangerouslySetInnerHTML={{ __html: `
-                (function(){
-                  // auto-select solo profesional
-                })();
-              ` }} />
-            )}
-
             {/* Auto-select si solo hay 1 profesional */}
             {professionals.length === 1 && selectedProfessional === "" && (() => {
               setSelectedProfessional(professionals[0].id);
@@ -244,16 +237,17 @@ export default function BookingPage() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>
+
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Teléfono (WhatsApp) *</label>
-                <input
-                  type="tel"
+                <PhoneInput
                   value={patientPhone}
-                  onChange={(e) => setPatientPhone(e.target.value)}
-                  placeholder="0991234567"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  onChange={setPatientPhone}
+                  placeholder="991234567"
                 />
+                <p className="mt-1 text-xs text-gray-400">Se usará para enviarte la confirmación por WhatsApp.</p>
               </div>
+
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Email (opcional)</label>
                 <input
@@ -292,6 +286,10 @@ export default function BookingPage() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Paciente</span>
                 <span className="font-medium">{patientName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">WhatsApp</span>
+                <span className="font-medium">{patientPhone}</span>
               </div>
             </div>
             <button
