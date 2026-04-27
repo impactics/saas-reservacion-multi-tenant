@@ -51,13 +51,26 @@ model Organization {
   timezone              String   @default("America/Guayaquil")
   googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
   whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
+
   // Política de cancelación y reembolsos
-  cancelRefundHours     Int      @default(24) @map("cancel_refund_hours")    // horas mínimas para reembolso total
-  cancelPartialHours    Int      @default(12) @map("cancel_partial_hours")   // horas mínimas para reembolso parcial
-  cancelPartialPct      Int      @default(50) @map("cancel_partial_pct")     // % de reembolso parcial
-  maxReschedules        Int      @default(2)  @map("max_reschedules")        // máximo de reprogramaciones
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+  cancelRefundHours  Int @default(24) @map("cancel_refund_hours")
+  cancelPartialHours Int @default(12) @map("cancel_partial_hours")
+  cancelPartialPct   Int @default(50) @map("cancel_partial_pct")
+  maxReschedules     Int @default(2)  @map("max_reschedules")
+
+  // ── Credenciales de pago por organización (Payphone) ──────────────────────
+  // Se guardan cifradas; nunca se exponen al frontend.
+  payphoneToken      String?  @map("payphone_token")       // Bearer token de Payphone
+  payphoneStoreId    String?  @map("payphone_store_id")    // Store ID de Payphone
+  payphoneEnabled    Boolean  @default(false) @map("payphone_enabled")
+
+  // ── Credenciales de WhatsApp por organización ─────────────────────────────
+  wapiToken          String?  @map("wapi_token")           // Token de acceso (Meta)
+  wapiPhoneNumberId  String?  @map("wapi_phone_number_id") // Phone Number ID (Meta)
+  wapiFromNumber     String?  @map("wapi_from_number")     // Número emisor +1555…
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
 
   professionals    Professional[]
   services         Service[]
@@ -75,7 +88,7 @@ model Patient {
   name           String?
   email          String?
   createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   bookings     Booking[]
@@ -96,7 +109,7 @@ model Professional {
   googleCalendarId    String?  @map("google_calendar_id")
   active              Boolean  @default(true)
   createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedAt           DateTime @updatedAt      @map("updated_at")
 
   organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   services          Service[]
@@ -121,7 +134,7 @@ model Service {
   currency        String   @default("USD")
   active          Boolean  @default(true)
   createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  updatedAt       DateTime @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
@@ -143,7 +156,7 @@ model AvailabilityRule {
   slotDurationMinutes Int      @map("slot_duration_minutes")
   active              Boolean  @default(true)
   createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedAt           DateTime @updatedAt      @map("updated_at")
 
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
@@ -162,7 +175,7 @@ model BlackoutDate {
   endTime        String?  @map("end_time")
   reason         String?
   createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
 
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
@@ -177,7 +190,7 @@ model Booking {
   organizationId     String        @map("organization_id")
   professionalId     String        @map("professional_id")
   serviceId          String        @map("service_id")
-  patientId          String?       @map("patient_id")   // nullable para reservas sin cuenta
+  patientId          String?       @map("patient_id")
   patientName        String        @map("patient_name")
   patientEmail       String?       @map("patient_email")
   patientPhone       String        @map("patient_phone")
@@ -189,9 +202,9 @@ model Booking {
   refundAmount       Decimal?      @map("refund_amount") @db.Decimal(10, 2)
   googleEventId      String?       @map("google_event_id")
   cancellationReason String?       @map("cancellation_reason")
-  accessToken        String?       @map("access_token")  // token único para link de gestión sin login
+  accessToken        String?       @map("access_token")
   createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  updatedAt          DateTime      @updatedAt      @map("updated_at")
 
   organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   professional     Professional        @relation(fields: [professionalId], references: [id], onDelete: Restrict)
@@ -238,7 +251,7 @@ model NotificationJob {
   attempts       Int                 @default(0)
   lastError      String?             @map("last_error")
   createdAt      DateTime            @default(now()) @map("created_at")
-  updatedAt      DateTime            @updatedAt @map("updated_at")
+  updatedAt      DateTime            @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
