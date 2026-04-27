@@ -7,6 +7,10 @@ datasource db {
   provider = "postgresql"
 }
 
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
 enum BookingStatus {
   PENDING
   CONFIRMED
@@ -19,6 +23,7 @@ enum PaymentStatus {
   UNPAID
   PAID
   REFUNDED
+  PARTIAL_REFUND
 }
 
 enum NotificationType {
@@ -40,6 +45,10 @@ enum NotificationStatus {
   FAILED
 }
 
+// ─────────────────────────────────────────────
+// ORGANIZATION
+// ─────────────────────────────────────────────
+
 model Organization {
   id                    String   @id @default(cuid())
   slug                  String   @unique
@@ -51,15 +60,71 @@ model Organization {
   timezone              String   @default("America/Guayaquil")
   googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
   whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
-  createdAt             DateTime @default(now()) @map("created_at")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Política de cancelación
+  // Horas antes de la cita para reembolso total (default 24h)
+  cancelFullRefundHours    Int  @default(24)  @map("cancel_full_refund_hours")
+  // Horas antes de la cita para reembolso parcial (default 12h)
+  cancelPartialRefundHours Int  @default(12)  @map("cancel_partial_refund_hours")
+  // Porcentaje de reembolso parcial 0–100 (default 50%)
+  cancelPartialRefundPct   Int  @default(50)  @map("cancel_partial_refund_pct")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
   professionals    Professional[]
   services         Service[]
   bookings         Booking[]
   notificationJobs NotificationJob[]
+  patients         Patient[]
 
   @@map("organizations")
 }
+
+// ─────────────────────────────────────────────
+// PATIENT  (identidad del paciente por teléfono)
+// ─────────────────────────────────────────────
+
+model Patient {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  phone          String                       // E.164 sin símbolo: "593999870308"
+  name           String
+  email          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+  otpCodes     PatientOTP[]
+
+  // Un paciente = un teléfono por organización
+  @@unique([organizationId, phone])
+  @@index([organizationId])
+  @@map("patients")
+}
+
+// ─────────────────────────────────────────────
+// PATIENT OTP  (código temporal enviado por WhatsApp)
+// ─────────────────────────────────────────────
+
+model PatientOTP {
+  id         String   @id @default(cuid())
+  patientId  String   @map("patient_id")
+  code       String                        // 6 dígitos
+  expiresAt  DateTime @map("expires_at")   // now() + 10 min
+  usedAt     DateTime? @map("used_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@map("patient_otps")
+}
+
+// ─────────────────────────────────────────────
+// PROFESSIONAL
+// ─────────────────────────────────────────────
 
 model Professional {
   id                  String   @id @default(cuid())
@@ -72,7 +137,7 @@ model Professional {
   googleCalendarId    String?  @map("google_calendar_id")
   active              Boolean  @default(true)
   createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedAt           DateTime @updatedAt      @map("updated_at")
 
   organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   services          Service[]
@@ -84,6 +149,10 @@ model Professional {
   @@index([organizationId, active])
   @@map("professionals")
 }
+
+// ─────────────────────────────────────────────
+// SERVICE
+// ─────────────────────────────────────────────
 
 model Service {
   id              String   @id @default(cuid())
@@ -97,7 +166,7 @@ model Service {
   currency        String   @default("USD")
   active          Boolean  @default(true)
   createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  updatedAt       DateTime @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
@@ -109,6 +178,10 @@ model Service {
   @@map("services")
 }
 
+// ─────────────────────────────────────────────
+// AVAILABILITY RULE
+// ─────────────────────────────────────────────
+
 model AvailabilityRule {
   id                  String   @id @default(cuid())
   organizationId      String   @map("organization_id")
@@ -119,7 +192,7 @@ model AvailabilityRule {
   slotDurationMinutes Int      @map("slot_duration_minutes")
   active              Boolean  @default(true)
   createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedAt           DateTime @updatedAt      @map("updated_at")
 
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
@@ -128,6 +201,10 @@ model AvailabilityRule {
   @@index([professionalId, dayOfWeek, active])
   @@map("availability_rules")
 }
+
+// ─────────────────────────────────────────────
+// BLACKOUT DATE
+// ─────────────────────────────────────────────
 
 model BlackoutDate {
   id             String   @id @default(cuid())
@@ -138,7 +215,7 @@ model BlackoutDate {
   endTime        String?  @map("end_time")
   reason         String?
   createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  updatedAt      DateTime @updatedAt      @map("updated_at")
 
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
@@ -148,38 +225,59 @@ model BlackoutDate {
   @@map("blackout_dates")
 }
 
+// ─────────────────────────────────────────────
+// BOOKING
+// ─────────────────────────────────────────────
+
 model Booking {
   id                 String        @id @default(cuid())
   organizationId     String        @map("organization_id")
   professionalId     String        @map("professional_id")
   serviceId          String        @map("service_id")
+
+  // Relación opcional con Patient (se vincula al confirmar OTP)
+  patientId          String?       @map("patient_id")
+
+  // Datos del paciente (se guardan igual para no romper flujo guest)
   patientName        String        @map("patient_name")
   patientEmail       String?       @map("patient_email")
   patientPhone       String        @map("patient_phone")
+
   scheduledAt        DateTime      @map("scheduled_at")
   durationMinutes    Int           @map("duration_minutes")
   status             BookingStatus @default(PENDING)
   paymentStatus      PaymentStatus @default(UNPAID) @map("payment_status")
   paymentId          String?       @map("payment_id")
+
+  // Reembolso: monto en centavos aplicado al cancelar
+  refundAmount       Int?          @map("refund_amount")
+  refundedAt         DateTime?     @map("refunded_at")
+
   googleEventId      String?       @map("google_event_id")
   cancellationReason String?       @map("cancellation_reason")
   createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt @map("updated_at")
+  updatedAt          DateTime      @updatedAt      @map("updated_at")
 
   organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   professional     Professional        @relation(fields: [professionalId], references: [id], onDelete: Restrict)
   service          Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  patient          Patient?            @relation(fields: [patientId], references: [id], onDelete: SetNull)
   reschedules      BookingReschedule[]
   notificationJobs NotificationJob[]
 
   @@index([organizationId])
   @@index([professionalId])
   @@index([serviceId])
+  @@index([patientId])
   @@index([organizationId, scheduledAt])
   @@index([professionalId, scheduledAt])
   @@index([patientPhone])
   @@map("bookings")
 }
+
+// ─────────────────────────────────────────────
+// BOOKING RESCHEDULE
+// ─────────────────────────────────────────────
 
 model BookingReschedule {
   id                  String   @id @default(cuid())
@@ -197,6 +295,10 @@ model BookingReschedule {
   @@map("booking_reschedules")
 }
 
+// ─────────────────────────────────────────────
+// NOTIFICATION JOB
+// ─────────────────────────────────────────────
+
 model NotificationJob {
   id             String              @id @default(cuid())
   organizationId String              @map("organization_id")
@@ -208,7 +310,7 @@ model NotificationJob {
   attempts       Int                 @default(0)
   lastError      String?             @map("last_error")
   createdAt      DateTime            @default(now()) @map("created_at")
-  updatedAt      DateTime            @updatedAt @map("updated_at")
+  updatedAt      DateTime            @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
