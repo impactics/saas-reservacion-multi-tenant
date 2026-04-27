@@ -4,20 +4,22 @@
  * /{slug}/mis-citas
  *
  * Portal del paciente: ver citas, reprogramar y cancelar.
- * Flujo de autenticación OTP vía WhatsApp.
+ * Autenticación OTP vía WhatsApp.
+ *
+ * Next.js 15: params es una Promise — se desenvuelve con React.use()
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { use, useState, useEffect, useCallback } from "react";
 
 type Booking = {
-  id:            string;
-  scheduledAt:   string;
-  status:        string;
-  paymentStatus: string;
+  id:              string;
+  scheduledAt:     string;
+  status:          string;
+  paymentStatus:   string;
   durationMinutes: number;
-  service:       { name: string; price: string; currency: string };
-  professional:  { name: string; specialty: string | null };
-  reschedules:   { id: string }[];
+  service:         { name: string; price: string; currency: string };
+  professional:    { name: string; specialty: string | null };
+  reschedules:     { id: string }[];
 };
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
@@ -38,35 +40,41 @@ function formatDate(iso: string) {
 
 // ─────────────────────────────────────────────────────────────
 
-export default function MisCitasPage({ params }: { params: { slug: string } }) {
-  const slug = params.slug;
+export default function MisCitasPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  // ✅ Next.js 15: params es una Promise, se desenvuelve con React.use()
+  const { slug } = use(params);
 
   // Auth state
-  const [step, setStep]         = useState<"phone" | "otp" | "portal">("phone");
-  const [phone, setPhone]       = useState("");
-  const [name, setName]         = useState("");
-  const [otp, setOtp]           = useState("");
+  const [step, setStep]           = useState<"phone" | "otp" | "portal">("phone");
+  const [phone, setPhone]         = useState("");
+  const [name, setName]           = useState("");
+  const [otp, setOtp]             = useState("");
   const [authError, setAuthError] = useState("");
-  const [loading, setLoading]   = useState(false);
+  const [loading, setLoading]     = useState(false);
 
   // Portal state
-  const [bookings, setBookings]     = useState<Booking[]>([]);
-  const [loadingBk, setLoadingBk]   = useState(false);
-  const [activeTab, setActiveTab]   = useState<"upcoming" | "all">("upcoming");
+  const [bookings, setBookings]           = useState<Booking[]>([]);
+  const [loadingBk, setLoadingBk]         = useState(false);
+  const [activeTab, setActiveTab]         = useState<"upcoming" | "all">("upcoming");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [actionMsg, setActionMsg]   = useState<{ id: string; msg: string; ok: boolean } | null>(null);
+  const [actionMsg, setActionMsg]         = useState<{ id: string; msg: string; ok: boolean } | null>(null);
   const [cancelReason, setCancelReason]   = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId]       = useState<string | null>(null);
 
   const apiBase = `/api/${slug}`;
 
-  // ── Cargar citas ────────────────────────────────────────────────────────────
+  // ── Cargar citas ─────────────────────────────────────────────────────────────
   const fetchBookings = useCallback(async () => {
     setLoadingBk(true);
     try {
-      const url = activeTab === "upcoming"
-        ? `${apiBase}/patients/me/bookings?upcoming=true`
-        : `${apiBase}/patients/me/bookings`;
+      const url =
+        activeTab === "upcoming"
+          ? `${apiBase}/patients/me/bookings?upcoming=true`
+          : `${apiBase}/patients/me/bookings`;
       const res = await fetch(url, { credentials: "include" });
       if (res.status === 401) { setStep("phone"); return; }
       const data = await res.json();
@@ -80,14 +88,14 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
     if (step === "portal") fetchBookings();
   }, [step, activeTab, fetchBookings]);
 
-  // Verificar si ya hay sesión activa al montar
+  // Verificar sesión activa al montar
   useEffect(() => {
     fetch(`${apiBase}/patients/me/bookings?upcoming=true`, { credentials: "include" })
       .then(r => { if (r.ok) setStep("portal"); })
       .catch(() => {});
   }, [apiBase]);
 
-  // ── Auth: solicitar OTP ─────────────────────────────────────────────────────
+  // ── Auth: solicitar OTP ───────────────────────────────────────────────────────
   async function handleRequestOtp(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true); setAuthError("");
@@ -105,7 +113,7 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
     }
   }
 
-  // ── Auth: verificar OTP ─────────────────────────────────────────────────────
+  // ── Auth: verificar OTP ───────────────────────────────────────────────────────
   async function handleVerifyOtp(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true); setAuthError("");
@@ -140,9 +148,9 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
         return;
       }
       let msg = "✅ Cita cancelada.";
-      if (data.refundPct === 100) msg += " Se procesará tu reembolso total.";
-      else if (data.refundPct > 0) msg += ` Reembolso parcial (${data.refundPct}%) en camino.`;
-      else msg += " No aplica reembolso por política de cancelación.";
+      if (data.refundPct === 100)    msg += " Se procesará tu reembolso total.";
+      else if (data.refundPct > 0)   msg += ` Reembolso parcial (${data.refundPct}%) en camino.`;
+      else                           msg += " No aplica reembolso por política de cancelación.";
       setActionMsg({ id: bookingId, msg, ok: true });
       setExpandedId(null);
       fetchBookings();
@@ -151,7 +159,7 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
     }
   }
 
-  // ── Render: pantalla de login ────────────────────────────────────────────────────
+  // ── Render: pantalla de login ─────────────────────────────────────────────────
   if (step === "phone") {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
@@ -272,7 +280,9 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
         ) : bookings.length === 0 ? (
           <div className="text-center py-16 text-gray-500">
             <span className="text-5xl block mb-3">📅</span>
-            <p className="font-medium">No tienes citas {activeTab === "upcoming" ? "próximas" : "ún"}</p>
+            <p className="font-medium">
+              No tienes citas {activeTab === "upcoming" ? "próximas" : "aún"}
+            </p>
             <a
               href={`/${slug}/servicios`}
               className="mt-4 inline-block bg-teal-700 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-teal-800"
@@ -283,9 +293,9 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
         ) : (
           <div className="flex flex-col gap-4">
             {bookings.map((bk) => {
-              const st    = STATUS_LABEL[bk.status] ?? { label: bk.status, color: "bg-gray-100 text-gray-700" };
-              const open  = expandedId === bk.id;
-              const msg   = actionMsg?.id === bk.id ? actionMsg : null;
+              const st   = STATUS_LABEL[bk.status] ?? { label: bk.status, color: "bg-gray-100 text-gray-700" };
+              const open = expandedId === bk.id;
+              const msg  = actionMsg?.id === bk.id ? actionMsg : null;
               return (
                 <div key={bk.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <div className="p-4">
@@ -318,9 +328,9 @@ export default function MisCitasPage({ params }: { params: { slug: string } }) {
                     <div className="border-t border-gray-100 bg-gray-50 p-4 flex flex-col gap-3">
                       <p className="text-sm text-gray-600 font-medium">¿Qué deseas hacer?</p>
 
-                      {/* Reprogramar — enlaza al booking flow con la cita ya seleccionada */}
+                      {/* Reprogramar */}
                       <a
-                        href={`/${slug}/booking?reschedule=${bk.id}&serviceId=${bk.id}`}
+                        href={`/${slug}/booking?reschedule=${bk.id}`}
                         className="flex items-center gap-2 text-sm bg-white border border-gray-200 rounded-lg px-4 py-2.5 hover:bg-gray-50"
                       >
                         🔄 <span>Reprogramar cita</span>
