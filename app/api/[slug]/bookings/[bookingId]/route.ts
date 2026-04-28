@@ -17,7 +17,7 @@ export async function GET(
       where: { id: bookingId, organizationId: org.id },
       include: {
         service: { select: { id: true, name: true, durationMinutes: true, price: true } },
-        professional: { select: { id: true, name: true, avatarUrl: true } },
+        professional: { select: { id: true, name: true } },
       },
     });
 
