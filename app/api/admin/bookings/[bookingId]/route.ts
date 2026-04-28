@@ -5,9 +5,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import type { Session } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/session";
+import type { Session } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 
@@ -29,7 +28,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ bookingId: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   const { bookingId } = await params;
 
   const booking = await getOrgBooking(session, bookingId);
@@ -59,7 +58,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ bookingId: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   const { bookingId } = await params;
 
   const booking = await prisma.booking.findFirst({

@@ -1,12 +1,10 @@
 /**
  * POST /api/admin/availability — crear regla de disponibilidad
  * DELETE /api/admin/availability?ruleId=xxx — desactivar regla
- * POST /api/admin/availability/blackout — crear fecha bloqueada
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 
@@ -19,13 +17,12 @@ const RuleSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   if (!session?.user?.organizationId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const body = RuleSchema.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "Datos inválidos", issues: body.error.issues }, { status: 400 });
 
-  // Verificar que el profesional pertenece a la org
   const prof = await prisma.professional.findFirst({
     where: { id: body.data.professionalId, organizationId: session.user.organizationId },
   });
@@ -45,7 +42,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   if (!session?.user?.organizationId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const ruleId = req.nextUrl.searchParams.get("ruleId");

@@ -5,7 +5,6 @@
  * Proveedores: Payphone y PayPal.
  *
  * PAYPHONE
- *   Header: (sin header especial — Payphone usa query params)
  *   Body: { clientTransactionId, transactionStatus, id }
  *   Verificamos con POST /api/button/Payments/verify
  *   clientTransactionId === bookingId
@@ -13,6 +12,7 @@
  * PAYPAL
  *   Header: paypal-transmission-sig + paypal-cert-url
  *   Evento: PAYMENT.CAPTURE.COMPLETED
+ *   Verificación de firma vía REST API de PayPal (sin SDK viejo)
  *   resource.purchase_units[0].custom_id === bookingId
  *
  * Idempotencia: booking ya PAID → 200 sin reprocesar.
@@ -22,19 +22,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { enqueueBookingConfirmedJobs } from "@/lib/notifications";
 
-// ── Punto de entrada ─────────────────────────────────────────────────────────
-
 export async function POST(req: NextRequest) {
   const paypalSig = req.headers.get("paypal-transmission-sig");
-
   if (paypalSig) return handlePayPal(req);
-
-  // Payphone no envía header de firma propio —
-  // detectamos por el body (campo clientTransactionId)
   return handlePayphone(req);
 }
 
-// ── PAYPHONE ─────────────────────────────────────────────────────────────────
+// ── PAYPHONE ──────────────────────────────────────────────────────────────────
 
 async function handlePayphone(req: NextRequest) {
   let body: {
@@ -58,10 +52,7 @@ async function handlePayphone(req: NextRequest) {
     const result = await verifyPayphonePayment(rawId, bookingId);
 
     if (!result.approved) {
-      console.info("[webhook/payment] Payphone: pago no aprobado", {
-        bookingId,
-        transactionStatus: result.transactionStatus,
-      });
+      console.info("[webhook/payment] Payphone: pago no aprobado", { bookingId });
       return NextResponse.json({ received: true });
     }
 
@@ -74,51 +65,59 @@ async function handlePayphone(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-// ── PAYPAL ───────────────────────────────────────────────────────────────────
+// ── PAYPAL ──────────────────────────────────────────────────────────────────
 
 async function handlePayPal(req: NextRequest) {
   const webhookId = process.env.PAYPAL_WEBHOOK_ID ?? "";
   const rawBody = await req.text();
 
-  const transmissionId = req.headers.get("paypal-transmission-id") ?? "";
+  const transmissionId  = req.headers.get("paypal-transmission-id")  ?? "";
   const transmissionTime = req.headers.get("paypal-transmission-time") ?? "";
-  const certUrl = req.headers.get("paypal-cert-url") ?? "";
-  const authAlgo = req.headers.get("paypal-auth-algo") ?? "";
-  const transmissionSig = req.headers.get("paypal-transmission-sig") ?? "";
+  const certUrl         = req.headers.get("paypal-cert-url")          ?? "";
+  const authAlgo        = req.headers.get("paypal-auth-algo")         ?? "";
+  const transmissionSig = req.headers.get("paypal-transmission-sig")  ?? "";
 
+  // Verificación de firma usando la REST API de PayPal directamente
+  // (no necesitamos el SDK viejo para esto)
   if (webhookId) {
     try {
-      const { default: checkoutNodeJssdk } = await import("@paypal/checkout-server-sdk");
-      const environment =
-        process.env.PAYPAL_ENV === "production"
-          ? new checkoutNodeJssdk.core.LiveEnvironment(
-              process.env.PAYPAL_CLIENT_ID ?? "",
-              process.env.PAYPAL_CLIENT_SECRET ?? ""
-            )
-          : new checkoutNodeJssdk.core.SandboxEnvironment(
-              process.env.PAYPAL_CLIENT_ID ?? "",
-              process.env.PAYPAL_CLIENT_SECRET ?? ""
-            );
+      const tokenRes = await fetch(
+        `https://api${process.env.PAYPAL_ENV === "production" ? "" : ".sandbox"}.paypal.com/v1/oauth2/token`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Basic ${Buffer.from(
+              `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`
+            ).toString("base64")}`,
+          },
+          body: "grant_type=client_credentials",
+        }
+      );
+      const { access_token } = await tokenRes.json() as { access_token: string };
 
-      const ppClient = new checkoutNodeJssdk.core.PayPalHttpClient(environment);
+      const verifyRes = await fetch(
+        `https://api${process.env.PAYPAL_ENV === "production" ? "" : ".sandbox"}.paypal.com/v1/notifications/verify-webhook-signature`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${access_token}`,
+          },
+          body: JSON.stringify({
+            transmission_id: transmissionId,
+            transmission_time: transmissionTime,
+            cert_url: certUrl,
+            auth_algo: authAlgo,
+            transmission_sig: transmissionSig,
+            webhook_id: webhookId,
+            webhook_event: JSON.parse(rawBody),
+          }),
+        }
+      );
 
-      const verifyReq = {
-        path: "/v1/notifications/verify-webhook-signature",
-        verb: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: {
-          transmission_id: transmissionId,
-          transmission_time: transmissionTime,
-          cert_url: certUrl,
-          auth_algo: authAlgo,
-          transmission_sig: transmissionSig,
-          webhook_id: webhookId,
-          webhook_event: JSON.parse(rawBody),
-        },
-      };
-
-      const verifyRes = await ppClient.execute(verifyReq as Parameters<typeof ppClient.execute>[0]);
-      if (verifyRes.result?.verification_status !== "SUCCESS") {
+      const { verification_status } = await verifyRes.json() as { verification_status: string };
+      if (verification_status !== "SUCCESS") {
         console.warn("[webhook/payment] PayPal firma inválida");
         return NextResponse.json({ error: "Firma inválida" }, { status: 400 });
       }
@@ -147,7 +146,6 @@ async function handlePayPal(req: NextRequest) {
   const bookingId =
     event.resource?.purchase_units?.[0]?.custom_id ??
     event.resource?.supplementary_data?.related_ids?.order_id;
-
   const captureId = event.resource?.id;
 
   if (!bookingId || !captureId) {
@@ -159,7 +157,7 @@ async function handlePayPal(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-// ── confirmBooking — función compartida ──────────────────────────────────────
+// ── confirmBooking — función compartida ────────────────────────────────────
 
 async function confirmBooking(bookingId: string, paymentId: string) {
   const existing = await prisma.booking.findUnique({

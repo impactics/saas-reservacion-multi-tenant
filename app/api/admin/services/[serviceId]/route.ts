@@ -4,8 +4,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSession } from "@/lib/session";
+import type { Session } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 
@@ -18,7 +18,7 @@ const UpdateSchema = z.object({
   active: z.boolean().optional(),
 });
 
-async function getOrgService(session: Awaited<ReturnType<typeof getServerSession>>, serviceId: string) {
+async function getOrgService(session: Session | null, serviceId: string) {
   if (!session?.user?.organizationId) return null;
   return prisma.service.findFirst({
     where: { id: serviceId, organizationId: session.user.organizationId },
@@ -29,7 +29,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ serviceId: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   const { serviceId } = await params;
   const service = await getOrgService(session, serviceId);
   if (!service) return NextResponse.json({ error: "No encontrado" }, { status: 404 });
@@ -48,7 +48,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ serviceId: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getSession();
   const { serviceId } = await params;
   const service = await getOrgService(session, serviceId);
   if (!service) return NextResponse.json({ error: "No encontrado" }, { status: 404 });
