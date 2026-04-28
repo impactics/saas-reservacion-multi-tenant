@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { enqueueBookingConfirmedJobs } from "@/lib/notifications";
 import { z } from "zod";
+import { withCors, corsOptions, getAllowedOrigins } from "@/lib/cors";
 
 const CreateBookingSchema = z.object({
   professionalId: z.string().min(1),
@@ -12,19 +12,31 @@ const CreateBookingSchema = z.object({
   scheduledAt: z.iso.datetime(),
 });
 
+// Preflight CORS
+export function OPTIONS(req: NextRequest) {
+  return corsOptions(req);
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const origin = req.headers.get("origin");
+  const origins = getAllowedOrigins();
+
   try {
     const { slug } = await params;
     const body = await req.json();
 
     const parsed = CreateBookingSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Datos inválidos", details: parsed.error.flatten() },
-        { status: 400 }
+      return withCors(
+        NextResponse.json(
+          { error: "Datos inválidos", details: parsed.error.flatten() },
+          { status: 400 }
+        ),
+        origin,
+        origins
       );
     }
 
@@ -32,9 +44,10 @@ export async function POST(
       where: { slug },
     });
     if (!org) {
-      return NextResponse.json(
-        { error: "Organización no encontrada" },
-        { status: 404 }
+      return withCors(
+        NextResponse.json({ error: "Organización no encontrada" }, { status: 404 }),
+        origin,
+        origins
       );
     }
 
@@ -46,19 +59,21 @@ export async function POST(
       },
     });
     if (!service) {
-      return NextResponse.json(
-        { error: "Servicio no encontrado" },
-        { status: 404 }
+      return withCors(
+        NextResponse.json({ error: "Servicio no encontrado" }, { status: 404 }),
+        origin,
+        origins
       );
     }
 
     const scheduledAt = new Date(parsed.data.scheduledAt);
 
     // Verificar que el slot sigue disponible (doble check)
+    // Considera tanto PENDING_PAYMENT como CONFIRMED para bloquear el slot
     const conflict = await prisma.booking.findFirst({
       where: {
         professionalId: parsed.data.professionalId,
-        status: { in: ["PENDING", "CONFIRMED"] },
+        status: { in: ["PENDING", "PENDING_PAYMENT", "CONFIRMED"] },
         scheduledAt: {
           gte: scheduledAt,
           lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60000),
@@ -66,12 +81,15 @@ export async function POST(
       },
     });
     if (conflict) {
-      return NextResponse.json(
-        { error: "El slot ya no está disponible" },
-        { status: 409 }
+      return withCors(
+        NextResponse.json({ error: "El slot ya no está disponible" }, { status: 409 }),
+        origin,
+        origins
       );
     }
 
+    // Crea la reserva en estado PENDING_PAYMENT.
+    // El webhook de pago la moverá a CONFIRMED y disparará las notificaciones.
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
@@ -82,23 +100,22 @@ export async function POST(
         patientPhone: parsed.data.patientPhone,
         scheduledAt,
         durationMinutes: service.durationMinutes,
-        status: "CONFIRMED",
+        status: "PENDING_PAYMENT",
         paymentStatus: "UNPAID",
       },
     });
 
-    // Encolar notificaciones de forma asíncrona (no bloquea la respuesta)
-    enqueueBookingConfirmedJobs({
-      organizationId: org.id,
-      bookingId: booking.id,
-      scheduledAt,
-      whatsappEnabled: org.whatsappEnabled,
-      calendarEnabled: org.googleCalendarEnabled,
-    }).catch((e) => console.error("[notifications] enqueue error", e));
-
-    return NextResponse.json({ booking }, { status: 201 });
+    return withCors(
+      NextResponse.json({ booking }, { status: 201 }),
+      origin,
+      origins
+    );
   } catch (err) {
     console.error("[bookings] POST error", err);
-    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+    return withCors(
+      NextResponse.json({ error: "Error interno" }, { status: 500 }),
+      origin,
+      origins
+    );
   }
 }
