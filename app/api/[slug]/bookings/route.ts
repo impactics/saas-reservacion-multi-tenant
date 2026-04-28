@@ -68,12 +68,13 @@ export async function POST(
 
     const scheduledAt = new Date(parsed.data.scheduledAt);
 
-    // Verificar que el slot sigue disponible (doble check)
-    // Considera tanto PENDING_PAYMENT como CONFIRMED para bloquear el slot
+    // Bloquea el slot si ya hay una reserva PENDING o CONFIRMED en ese horario.
+    // El estado PENDING cubre tanto reservas sin pago como pendientes de confirmación.
+    // El campo paymentStatus (UNPAID/PAID) maneja el estado del pago por separado.
     const conflict = await prisma.booking.findFirst({
       where: {
         professionalId: parsed.data.professionalId,
-        status: { in: ["PENDING", "PENDING_PAYMENT", "CONFIRMED"] },
+        status: { in: ["PENDING", "CONFIRMED"] },
         scheduledAt: {
           gte: scheduledAt,
           lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60000),
@@ -88,8 +89,8 @@ export async function POST(
       );
     }
 
-    // Crea la reserva en estado PENDING_PAYMENT.
-    // El webhook de pago la moverá a CONFIRMED y disparará las notificaciones.
+    // Crea la reserva en estado PENDING con paymentStatus UNPAID.
+    // El webhook de pago moverá paymentStatus a PAID y el status a CONFIRMED.
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
@@ -100,7 +101,7 @@ export async function POST(
         patientPhone: parsed.data.patientPhone,
         scheduledAt,
         durationMinutes: service.durationMinutes,
-        status: "PENDING_PAYMENT",
+        status: "PENDING",
         paymentStatus: "UNPAID",
       },
     });
