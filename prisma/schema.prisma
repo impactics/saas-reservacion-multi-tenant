@@ -52,22 +52,18 @@ model Organization {
   googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
   whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
 
-  // Política de cancelación y reembolsos
   cancelRefundHours  Int @default(24) @map("cancel_refund_hours")
   cancelPartialHours Int @default(12) @map("cancel_partial_hours")
   cancelPartialPct   Int @default(50) @map("cancel_partial_pct")
   maxReschedules     Int @default(2)  @map("max_reschedules")
 
-  // ── Credenciales de pago por organización (Payphone) ──────────────────────
-  // Se guardan cifradas; nunca se exponen al frontend.
-  payphoneToken      String?  @map("payphone_token")       // Bearer token de Payphone
-  payphoneStoreId    String?  @map("payphone_store_id")    // Store ID de Payphone
+  payphoneToken      String?  @map("payphone_token")
+  payphoneStoreId    String?  @map("payphone_store_id")
   payphoneEnabled    Boolean  @default(false) @map("payphone_enabled")
 
-  // ── Credenciales de WhatsApp por organización ─────────────────────────────
-  wapiToken          String?  @map("wapi_token")           // Token de acceso (Meta)
-  wapiPhoneNumberId  String?  @map("wapi_phone_number_id") // Phone Number ID (Meta)
-  wapiFromNumber     String?  @map("wapi_from_number")     // Número emisor +1555…
+  wapiToken          String?  @map("wapi_token")
+  wapiPhoneNumberId  String?  @map("wapi_phone_number_id")
+  wapiFromNumber     String?  @map("wapi_from_number")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
@@ -77,8 +73,29 @@ model Organization {
   bookings         Booking[]
   patients         Patient[]
   notificationJobs NotificationJob[]
+  apiKeys          ApiKey[]
 
   @@map("organizations")
+}
+
+// API Keys para integracion headless con ecommerces externos
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
+  name           String
+  keyHash        String    @unique @map("key_hash")
+  keyPrefix      String    @map("key_prefix")
+  allowedOrigins String[]  @map("allowed_origins")
+  active         Boolean   @default(true)
+  lastUsedAt     DateTime? @map("last_used_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyHash])
+  @@map("api_keys")
 }
 
 model Patient {
