@@ -1,7 +1,7 @@
 /**
  * POST /api/[slug]/checkout
  *
- * Crea una sesión de pago para un booking PENDING_PAYMENT.
+ * Crea una sesión de pago para un booking PENDING.
  *
  * Proveedores soportados (PAYMENT_PROVIDER en .env):
  *   payphone → { provider, paymentUrl, paymentId }
@@ -86,7 +86,7 @@ export async function POST(
       body.data.cancelUrl ??
       `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=cancelled`;
 
-    // ── PAYPHONE ─────────────────────────────────────────────────────────────
+    // ── PAYPHONE ─────────────────────────────────────────────────────────
     if (provider === "payphone") {
       const { createPayphoneLink } = await import("@/lib/payphone");
 
@@ -117,7 +117,7 @@ export async function POST(
       );
     }
 
-    // ── PAYPAL ───────────────────────────────────────────────────────────────
+    // ── PAYPAL ──────────────────────────────────────────────────────────────
     if (provider === "paypal") {
       const { default: checkoutNodeJssdk } = await import(
         "@paypal/checkout-server-sdk"
@@ -158,7 +158,7 @@ export async function POST(
       });
 
       const order = await client.execute(request);
-      const orderId: string = order.result.id;
+      const orderId = order.result.id as string;
 
       await prisma.booking.update({
         where: { id: booking.id },
