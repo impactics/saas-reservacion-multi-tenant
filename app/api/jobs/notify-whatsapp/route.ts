@@ -11,7 +11,6 @@ interface Payload {
 }
 
 export async function POST(req: NextRequest) {
-  // Verificar firma QStash
   const body = await req.text();
   const signature = req.headers.get("upstash-signature") ?? "";
   const isValid = await qstashReceiver.verify({ signature, body });
@@ -41,7 +40,6 @@ export async function POST(req: NextRequest) {
   const dateStr = format(localDate, "dd/MM/yyyy");
   const timeStr = format(localDate, "HH:mm");
 
-  // Mensajes según tipo de notificación
   const messages: Record<string, string> = {
     BOOKING_CONFIRMED: `✅ *Reserva confirmada*\n\nHola ${booking.patientName}, tu cita ha sido confirmada.\n\n📅 *Fecha:* ${dateStr}\n🕐 *Hora:* ${timeStr}\n🏥 *Servicio:* ${booking.service.name}\n👨‍⚕️ *Profesional:* ${booking.professional.name}\n\nPara reagendar o cancelar: ${process.env.NEXT_PUBLIC_APP_URL}/${booking.organization.slug}/reserva/${booking.id}`,
     BOOKING_RESCHEDULED: `🔄 *Cita reagendada*\n\nHola ${booking.patientName}, tu cita ha sido reagendada.\n\n📅 *Nueva fecha:* ${dateStr}\n🕐 *Nueva hora:* ${timeStr}\n🏥 *Servicio:* ${booking.service.name}`,
@@ -53,38 +51,36 @@ export async function POST(req: NextRequest) {
   if (!message) {
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", error: `Tipo desconocido: ${job.type}` },
+      data: { status: "FAILED", lastError: `Tipo desconocido: ${job.type}` },
     });
     return NextResponse.json({ error: "Tipo desconocido" }, { status: 400 });
   }
 
   try {
-    // Llamar a la API de WhatsApp (Twilio, Meta API, etc.)
-    // La URL y credenciales se configuran por variables de entorno
-    const whatsappApiUrl = process.env.WHATSAPP_API_URL;
-    const whatsappToken = process.env.WHATSAPP_API_TOKEN;
-    const fromNumber = process.env.WHATSAPP_FROM_NUMBER;
-
-    if (!whatsappApiUrl || !whatsappToken || !fromNumber) {
-      throw new Error("WhatsApp API no configurada");
+    const { wapiToken, wapiPhoneNumberId, wapiFromNumber } = booking.organization;
+    if (!wapiToken || !wapiPhoneNumberId || !wapiFromNumber) {
+      throw new Error("WhatsApp API no configurada en la organización");
     }
 
     const phone = booking.patientPhone.replace(/[^0-9]/g, "");
     const toNumber = phone.startsWith("593") ? phone : `593${phone.replace(/^0/, "")}`;
 
-    const res = await fetch(whatsappApiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${whatsappToken}`,
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: toNumber,
-        type: "text",
-        text: { body: message },
-      }),
-    });
+    const res = await fetch(
+      `https://graph.facebook.com/v19.0/${wapiPhoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${wapiToken}`,
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: toNumber,
+          type: "text",
+          text: { body: message },
+        }),
+      }
+    );
 
     if (!res.ok) {
       const errText = await res.text();
@@ -93,22 +89,17 @@ export async function POST(req: NextRequest) {
 
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "SENT", sentAt: new Date() },
+      data: { status: "SENT" },
     });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const lastError = err instanceof Error ? err.message : String(err);
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: {
-        status: "FAILED",
-        error,
-        retries: { increment: 1 },
-      },
+      data: { status: "FAILED", lastError, attempts: { increment: 1 } },
     });
-    console.error("[notify-whatsapp] error", error);
-    // Retornar 500 para que QStash reintente automáticamente
-    return NextResponse.json({ error }, { status: 500 });
+    console.error("[notify-whatsapp] error", lastError);
+    return NextResponse.json({ error: lastError }, { status: 500 });
   }
 }

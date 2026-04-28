@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
   if (!job.booking.patientEmail) {
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", error: "Sin email del paciente" },
+      data: { status: "FAILED", lastError: "Sin email del paciente" },
     });
     return NextResponse.json({ skipped: true });
   }
@@ -99,13 +99,12 @@ export async function POST(req: NextRequest) {
   if (!subject || !html) {
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", error: `Tipo desconocido: ${job.type}` },
+      data: { status: "FAILED", lastError: `Tipo desconocido: ${job.type}` },
     });
     return NextResponse.json({ error: "Tipo desconocido" }, { status: 400 });
   }
 
   try {
-    // Resend como proveedor de email (se puede cambiar a cualquier otro)
     const resendApiKey = process.env.RESEND_API_KEY;
     const fromEmail = process.env.EMAIL_FROM ?? "noreply@example.com";
     if (!resendApiKey) throw new Error("RESEND_API_KEY no configurada");
@@ -131,17 +130,17 @@ export async function POST(req: NextRequest) {
 
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "SENT", sentAt: new Date() },
+      data: { status: "SENT" },
     });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const lastError = err instanceof Error ? err.message : String(err);
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", error, retries: { increment: 1 } },
+      data: { status: "FAILED", lastError, attempts: { increment: 1 } },
     });
-    console.error("[notify-email] error", error);
-    return NextResponse.json({ error }, { status: 500 });
+    console.error("[notify-email] error", lastError);
+    return NextResponse.json({ error: lastError }, { status: 500 });
   }
 }
