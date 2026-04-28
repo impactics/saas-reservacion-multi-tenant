@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 import { verifyApiKey } from "@/lib/apiKey";
-import { withCors } from "@/lib/cors";
+import { withCors, corsOptions } from "@/lib/cors";
 
 export async function OPTIONS(req: NextRequest) {
-  return new NextResponse(null, { status: 204 });
+  return corsOptions(req);
 }
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { slug: string } }
+  { params }: { params: Promise<{ slug: string }> }
 ) {
+  const { slug } = await params;
   const origin = req.headers.get("origin");
   const apiKey =
     req.headers.get("x-api-key") ??
@@ -20,21 +21,21 @@ export async function GET(
 
   if (apiKey) {
     const verified = await verifyApiKey(apiKey, origin);
-    if (!verified || verified.slug !== params.slug) {
+    if (!verified || verified.slug !== slug) {
       return withCors(
         NextResponse.json({ error: "API key invalida" }, { status: 401 }),
         origin
       );
     }
     const key = await prisma.apiKey.findFirst({
-      where: { organization: { slug: params.slug }, active: true },
+      where: { organization: { slug }, active: true },
       select: { allowedOrigins: true },
     });
     allowedOrigins = key?.allowedOrigins?.length ? key.allowedOrigins : ["*"];
   }
 
   const org = await prisma.organization.findUnique({
-    where: { slug: params.slug },
+    where: { slug },
     select: { id: true },
   });
   if (!org) {
