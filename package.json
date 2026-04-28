@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
@@ -13,6 +13,7 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@paypal/checkout-server-sdk": "^1.0.3",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@upstash/qstash": "^2.10.1",
@@ -22,6 +23,7 @@
     "date-fns-tz": "^3.2.0",
     "googleapis": "^171.4.0",
     "jose": "^6.2.2",
+    "mercadopago": "^2.5.2",
     "nanoid": "^5.1.9",
     "next": "16.2.4",
     "next-auth": "^4.24.14",
@@ -29,6 +31,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "resend": "^6.12.2",
+    "stripe": "^17.7.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
