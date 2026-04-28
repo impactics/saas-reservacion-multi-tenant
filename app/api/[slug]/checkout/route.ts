@@ -1,7 +1,7 @@
 /**
  * POST /api/[slug]/checkout
  *
- * Crea una sesión de pago para un booking PENDING.
+ * Crea una sesión de pago para un booking PENDING_PAYMENT.
  *
  * Proveedores soportados (PAYMENT_PROVIDER en .env):
  *   stripe      → { provider, clientSecret, publishableKey, amount, currency }
@@ -9,34 +9,52 @@
  *   payphone    → { provider, paymentUrl, paymentId }
  *   paypal      → { provider, orderId, clientId }
  *
- * Body: { bookingId: string }
+ * Body: { bookingId: string, returnUrl?: string, cancelUrl?: string }
  *
- * El bookingId se guarda en metadata/reference de cada proveedor
- * para que el webhook lo recupere y confirme la reserva.
+ * returnUrl y cancelUrl son opcionales: el ecommerce los pasa para que el
+ * usuario vuelva al ecommerce después del pago en lugar del SaaS.
+ * Si no se envían, se usa NEXT_PUBLIC_APP_URL como fallback.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { withCors, corsOptions, getAllowedOrigins } from "@/lib/cors";
 
 const CheckoutSchema = z.object({
   bookingId: z.string().min(1),
+  returnUrl: z.url().optional(),
+  cancelUrl: z.url().optional(),
 });
+
+// Preflight CORS
+export function OPTIONS(req: NextRequest) {
+  return corsOptions(req);
+}
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const origin = req.headers.get("origin");
+  const origins = getAllowedOrigins();
+
   try {
     const { slug } = await params;
     const body = CheckoutSchema.safeParse(await req.json());
     if (!body.success) {
-      return NextResponse.json({ error: "Datos inválidos" }, { status: 400 });
+      return withCors(
+        NextResponse.json({ error: "Datos inválidos" }, { status: 400 }),
+        origin, origins
+      );
     }
 
     const org = await prisma.organization.findUnique({ where: { slug } });
     if (!org) {
-      return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
+      return withCors(
+        NextResponse.json({ error: "Organización no encontrada" }, { status: 404 }),
+        origin, origins
+      );
     }
 
     const booking = await prisma.booking.findFirst({
@@ -48,17 +66,31 @@ export async function POST(
     });
 
     if (!booking) {
-      return NextResponse.json({ error: "Reserva no encontrada" }, { status: 404 });
+      return withCors(
+        NextResponse.json({ error: "Reserva no encontrada" }, { status: 404 }),
+        origin, origins
+      );
     }
 
     if (booking.paymentStatus === "PAID") {
-      return NextResponse.json({ error: "Esta reserva ya fue pagada" }, { status: 409 });
+      return withCors(
+        NextResponse.json({ error: "Esta reserva ya fue pagada" }, { status: 409 }),
+        origin, origins
+      );
     }
 
     const price = booking.service.price ? Number(booking.service.price) : 0;
     const currency = (booking.service.currency ?? "USD").toUpperCase();
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
     const provider = process.env.PAYMENT_PROVIDER ?? "stripe";
+
+    // URLs de retorno: el ecommerce las pasa en el body; si no, usamos el SaaS
+    const returnUrl =
+      body.data.returnUrl ??
+      `${appUrl}/${slug}/booking/confirmacion?bookingId=${booking.id}`;
+    const cancelUrl =
+      body.data.cancelUrl ??
+      `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=cancelled`;
 
     // ── STRIPE ────────────────────────────────────────────────────────────────
     if (provider === "stripe") {
@@ -80,13 +112,16 @@ export async function POST(
         data: { paymentId: paymentIntent.id },
       });
 
-      return NextResponse.json({
-        provider: "stripe",
-        clientSecret: paymentIntent.client_secret,
-        publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
-        amount: price,
-        currency,
-      });
+      return withCors(
+        NextResponse.json({
+          provider: "stripe",
+          clientSecret: paymentIntent.client_secret,
+          publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
+          amount: price,
+          currency,
+        }),
+        origin, origins
+      );
     }
 
     // ── MERCADOPAGO ──────────────────────────────────────────────────────────
@@ -112,9 +147,9 @@ export async function POST(
             phone: { number: booking.patientPhone },
           },
           back_urls: {
-            success: `${appUrl}/${slug}/booking/confirmacion?bookingId=${booking.id}`,
-            failure: `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=payment_failed`,
-            pending: `${appUrl}/${slug}/booking/confirmacion?bookingId=${booking.id}&pending=true`,
+            success: returnUrl,
+            failure: cancelUrl,
+            pending: `${returnUrl}&pending=true`,
           },
           auto_return: "approved",
           metadata: { bookingId: booking.id, organizationId: org.id },
@@ -126,12 +161,15 @@ export async function POST(
         data: { paymentId: preference.id ?? null },
       });
 
-      return NextResponse.json({
-        provider: "mercadopago",
-        initPoint: preference.init_point,
-        sandboxInitPoint: preference.sandbox_init_point,
-        preferenceId: preference.id,
-      });
+      return withCors(
+        NextResponse.json({
+          provider: "mercadopago",
+          initPoint: preference.init_point,
+          sandboxInitPoint: preference.sandbox_init_point,
+          preferenceId: preference.id,
+        }),
+        origin, origins
+      );
     }
 
     // ── PAYPHONE ─────────────────────────────────────────────────────────────
@@ -139,12 +177,12 @@ export async function POST(
       const { createPayphoneLink } = await import("@/lib/payphone");
 
       const link = await createPayphoneLink({
-        amount: Math.round(price * 100), // centavos
+        amount: Math.round(price * 100),
         currency,
         bookingId: booking.id,
-        clientTransactionId: booking.id, // único por transacción
+        clientTransactionId: booking.id,
         callbackUrl: `${appUrl}/api/webhooks/payment`,
-        cancellationUrl: `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=cancelled`,
+        cancellationUrl: cancelUrl,
         reference: `${booking.service.name} — ${org.name}`,
         email: booking.patientEmail ?? undefined,
         phoneNumber: booking.patientPhone ?? undefined,
@@ -155,11 +193,14 @@ export async function POST(
         data: { paymentId: String(link.paymentId) },
       });
 
-      return NextResponse.json({
-        provider: "payphone",
-        paymentUrl: link.paymentUrl,
-        paymentId: link.paymentId,
-      });
+      return withCors(
+        NextResponse.json({
+          provider: "payphone",
+          paymentUrl: link.paymentUrl,
+          paymentId: link.paymentId,
+        }),
+        origin, origins
+      );
     }
 
     // ── PAYPAL ───────────────────────────────────────────────────────────────
@@ -191,14 +232,14 @@ export async function POST(
             currency_code: currency,
             value: price.toFixed(2),
           },
-          custom_id: booking.id, // recuperamos en el webhook
+          custom_id: booking.id,
         }],
         application_context: {
           brand_name: org.name,
           landing_page: "BILLING",
           user_action: "PAY_NOW",
-          return_url: `${appUrl}/${slug}/booking/confirmacion?bookingId=${booking.id}`,
-          cancel_url: `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=cancelled`,
+          return_url: returnUrl,
+          cancel_url: cancelUrl,
         },
       });
 
@@ -210,21 +251,30 @@ export async function POST(
         data: { paymentId: orderId },
       });
 
-      return NextResponse.json({
-        provider: "paypal",
-        orderId,
-        clientId: process.env.PAYPAL_CLIENT_ID,
-        amount: price,
-        currency,
-      });
+      return withCors(
+        NextResponse.json({
+          provider: "paypal",
+          orderId,
+          clientId: process.env.PAYPAL_CLIENT_ID,
+          amount: price,
+          currency,
+        }),
+        origin, origins
+      );
     }
 
-    return NextResponse.json(
-      { error: `Proveedor "${provider}" no soportado` },
-      { status: 500 }
+    return withCors(
+      NextResponse.json(
+        { error: `Proveedor "${provider}" no soportado` },
+        { status: 500 }
+      ),
+      origin, origins
     );
   } catch (err) {
     console.error("[checkout] error", err);
-    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+    return withCors(
+      NextResponse.json({ error: "Error interno" }, { status: 500 }),
+      origin, origins
+    );
   }
 }
