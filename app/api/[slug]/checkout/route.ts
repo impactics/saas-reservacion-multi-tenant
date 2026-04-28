@@ -78,7 +78,6 @@ export async function POST(
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
     const provider = process.env.PAYMENT_PROVIDER ?? "payphone";
 
-    // URLs de retorno: el ecommerce las pasa en el body; si no, usamos el SaaS
     const returnUrl =
       body.data.returnUrl ??
       `${appUrl}/${slug}/booking/confirmacion?bookingId=${booking.id}`;
@@ -119,46 +118,17 @@ export async function POST(
 
     // ── PAYPAL ──────────────────────────────────────────────────────────────
     if (provider === "paypal") {
-      const { default: checkoutNodeJssdk } = await import(
-        "@paypal/checkout-server-sdk"
-      );
+      const { createPayPalOrder } = await import("@/lib/paypal");
 
-      const environment =
-        process.env.PAYPAL_ENV === "production"
-          ? new checkoutNodeJssdk.core.LiveEnvironment(
-              process.env.PAYPAL_CLIENT_ID ?? "",
-              process.env.PAYPAL_CLIENT_SECRET ?? ""
-            )
-          : new checkoutNodeJssdk.core.SandboxEnvironment(
-              process.env.PAYPAL_CLIENT_ID ?? "",
-              process.env.PAYPAL_CLIENT_SECRET ?? ""
-            );
-
-      const client = new checkoutNodeJssdk.core.PayPalHttpClient(environment);
-      const request = new checkoutNodeJssdk.orders.OrdersCreateRequest();
-      request.prefer("return=representation");
-      request.requestBody({
-        intent: "CAPTURE",
-        purchase_units: [{
-          reference_id: booking.id,
-          description: `${booking.service.name} — ${org.name}`,
-          amount: {
-            currency_code: currency,
-            value: price.toFixed(2),
-          },
-          custom_id: booking.id,
-        }],
-        application_context: {
-          brand_name: org.name,
-          landing_page: "BILLING",
-          user_action: "PAY_NOW",
-          return_url: returnUrl,
-          cancel_url: cancelUrl,
-        },
+      const orderId = await createPayPalOrder({
+        amount: price,
+        currency,
+        bookingId: booking.id,
+        description: `${booking.service.name} — ${org.name}`,
+        brandName: org.name,
+        returnUrl,
+        cancelUrl,
       });
-
-      const order = await client.execute(request);
-      const orderId = order.result.id as string;
 
       await prisma.booking.update({
         where: { id: booking.id },

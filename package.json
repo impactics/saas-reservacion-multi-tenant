@@ -13,7 +13,7 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
-    "@paypal/checkout-server-sdk": "^1.0.3",
+    "@paypal/paypal-server-sdk": "^0.6.1",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@upstash/qstash": "^2.10.1",

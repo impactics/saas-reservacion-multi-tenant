@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import type { Session } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
@@ -17,10 +18,7 @@ const UpdateSchema = z.object({
   scheduledAt: z.iso.datetime().optional(),
 });
 
-async function getOrgBooking(
-  session: Awaited<ReturnType<typeof getServerSession>>,
-  bookingId: string
-) {
+async function getOrgBooking(session: Session | null, bookingId: string) {
   if (!session?.user?.organizationId) return null;
   return prisma.booking.findFirst({
     where: { id: bookingId, organizationId: session.user.organizationId },
