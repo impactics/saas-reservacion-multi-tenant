@@ -22,19 +22,14 @@ export default async function PaymentSettingsPage() {
       id:                 true,
       payphoneEnabled:    true,
       payphoneStoreId:    true,
-      // nunca enviamos el token completo al cliente
-      payphoneTokenSet:   false,
       wapiPhoneNumberId:  true,
       wapiFromNumber:     true,
-      // nunca enviamos el token completo al cliente
-      wapiTokenSet:       false,
-      // calculamos si están seteados en el servidor
     },
   });
 
   if (!org) redirect("/login");
 
-  // Verificar si los tokens están configurados (sin exponerlos)
+  // Verificar si los tokens están configurados (sin exponerlos al cliente)
   const raw = await prisma.organization.findUnique({
     where: { id: session.user.organizationId },
     select: { payphoneToken: true, wapiToken: true },
