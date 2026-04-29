@@ -1,6 +1,7 @@
 // ============================================================
 // Prisma Schema — SaaS Reservación Multi-Tenant
-// Prisma 7: datasource connection URL lives in prisma.config.ts
+// Prisma 7 + driverAdapters: datasource needs provider only.
+// Connection URL is defined in prisma.config.ts (datasource.url).
 // ============================================================
 
 generator client {
@@ -9,8 +10,11 @@ generator client {
   previewFeatures = ["driverAdapters"]
 }
 
-// NOTE: No datasource block here — Prisma 7 requires the connection
-// URL to be defined in prisma.config.ts (datasource.url).
+// Prisma 7 + driverAdapters: solo el provider, sin url.
+// La URL de conexión va en prisma.config.ts → datasource.url
+datasource db {
+  provider = "postgresql"
+}
 
 // ------------------------------------------------------------
 // ENUMS
