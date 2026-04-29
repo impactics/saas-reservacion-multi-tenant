@@ -70,14 +70,30 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
 
-  professionals    Professional[]
-  services         Service[]
-  bookings         Booking[]
-  patients         Patient[]
-  notificationJobs NotificationJob[]
-  apiKeys          ApiKey[]
+  professionals           Professional[]
+  services                Service[]
+  bookings                Booking[]
+  patients                Patient[]
+  notificationJobs        NotificationJob[]
+  apiKeys                 ApiKey[]
+  googleCalendarConnection GoogleCalendarConnection?
 
   @@map("organizations")
+}
+
+model GoogleCalendarConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  accessToken    String    @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  expiresAt      DateTime? @map("expires_at")
+  calendarId     String?   @map("calendar_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("google_calendar_connections")
 }
 
 // API Keys para integracion headless con ecommerces externos
