@@ -12,10 +12,15 @@ export async function DELETE(
 
   const { id } = await params;
 
-  const org = await prisma.organization.findUnique({ where: { id } });
+  // select explícito para no leer columnas que aún no existen en la DB
+  const org = await prisma.organization.findUnique({
+    where: { id },
+    select: { id: true, name: true },
+  });
   if (!org) return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
 
-  await prisma.organization.delete({ where: { id } });
+  // Prisma emite DELETE FROM organizations WHERE id = ? — el cascade lo maneja la DB
+  await prisma.$executeRaw`DELETE FROM organizations WHERE id = ${id}`;
 
   return NextResponse.json({ ok: true });
 }
