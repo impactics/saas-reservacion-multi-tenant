@@ -9,22 +9,51 @@ import { sendWhatsAppText } from "@/lib/whatsapp";
 import { prisma } from "@/lib/prisma";
 import { SignJWT, jwtVerify } from "jose";
 
-const JWT_SECRET    = new TextEncoder().encode(process.env.NEXTAUTH_SECRET ?? "dev-secret-change-in-prod");
-const OTP_TTL       = 600;
-const OTP_KEY       = (orgId: string, phone: string) => `otp:${orgId}:${phone.replace(/\D/g, "")}`;
+const JWT_SECRET = new TextEncoder().encode(process.env.NEXTAUTH_SECRET ?? "dev-secret-change-in-prod");
+const OTP_TTL    = 600;
+const OTP_KEY    = (orgId: string, phone: string) => `otp:${orgId}:${phone.replace(/\D/g, "")}`;
 
-export async function requestOtp({ orgId, orgName, phone }: { orgId: string; orgName: string; phone: string }) {
-  const rl = await rateLimit({ key: `otp_req:${phone.replace(/\D/g, "")}`, maxRequests: 3, windowSeconds: OTP_TTL });
+export async function requestOtp({
+  orgId,
+  orgName,
+  phone,
+}: {
+  orgId: string;
+  orgName: string;
+  phone: string;
+}) {
+  const rl = await rateLimit({
+    key: `otp_req:${phone.replace(/\D/g, "")}`,
+    maxRequests: 3,
+    windowSeconds: OTP_TTL,
+  });
   if (!rl.allowed) return { sent: false, error: "Demasiados intentos. Espera 10 minutos." };
 
   const code = String(Math.floor(100000 + Math.random() * 900000));
   await redis.set(OTP_KEY(orgId, phone), code, { ex: OTP_TTL });
-  await sendWhatsAppText(phone, `🔐 *${orgName}* — Tu código es: *${code}*\nVálido 10 min. No lo compartas.`);
+  await sendWhatsAppText(
+    phone,
+    `🔐 *${orgName}* — Tu código es: *${code}*\nVálido 10 min. No lo compartas.`
+  );
   return { sent: true };
 }
 
-export async function verifyOtp({ orgId, phone, code, name }: { orgId: string; phone: string; code: string; name?: string }) {
-  const rl = await rateLimit({ key: `otp_verify:${phone.replace(/\D/g, "")}`, maxRequests: 5, windowSeconds: OTP_TTL });
+export async function verifyOtp({
+  orgId,
+  phone,
+  code,
+  name,
+}: {
+  orgId: string;
+  phone: string;
+  code: string;
+  name?: string;
+}) {
+  const rl = await rateLimit({
+    key: `otp_verify:${phone.replace(/\D/g, "")}`,
+    maxRequests: 5,
+    windowSeconds: OTP_TTL,
+  });
   if (!rl.allowed) return { error: "Demasiados intentos. Solicita un nuevo código." };
 
   const stored = await redis.get<string>(OTP_KEY(orgId, phone));
@@ -33,9 +62,12 @@ export async function verifyOtp({ orgId, phone, code, name }: { orgId: string; p
   await redis.del(OTP_KEY(orgId, phone));
 
   const cleanPhone = "+" + phone.replace(/\D/g, "");
+
+  // Patient.name es String (no nullable en el schema) — usar string vacío como
+  // fallback para que el paciente pueda completar su nombre después.
   const patient = await prisma.patient.upsert({
     where:  { organizationId_phone: { organizationId: orgId, phone: cleanPhone } },
-    create: { organizationId: orgId, phone: cleanPhone, name: name ?? null },
+    create: { organizationId: orgId, phone: cleanPhone, name: name ?? "" },
     update: { ...(name ? { name } : {}) },
   });
 
@@ -47,7 +79,9 @@ export async function verifyOtp({ orgId, phone, code, name }: { orgId: string; p
   return { patient, token };
 }
 
-export async function verifyPatientToken(token: string): Promise<{ patientId: string; orgId: string } | null> {
+export async function verifyPatientToken(
+  token: string
+): Promise<{ patientId: string; orgId: string } | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
     return { patientId: payload.patientId as string, orgId: payload.orgId as string };
