@@ -1,14 +1,9 @@
-/**
- * Gestión de disponibilidad por profesional
- * - Reglas semanales (día, hora inicio/fin, duración de slot)
- * - Fechas bloqueadas (blackout dates)
- */
-
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import AvailabilityForm from "@/components/admin/AvailabilityForm";
+import AvailabilityTabs from "@/components/admin/AvailabilityTabs";
+import Link from "next/link";
 
 const DAYS = [
   { value: 0, label: "Domingo" },
@@ -29,6 +24,20 @@ export default async function AdminAvailabilityPage({
   if (!session?.user?.organizationId) redirect("/login");
 
   const orgId = session.user.organizationId;
+
+  if (orgId === "superadmin") {
+    return (
+      <div className="flex flex-col gap-4 max-w-lg">
+        <h1 className="text-2xl font-bold text-gray-900">Disponibilidad</h1>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <p className="text-sm font-semibold text-amber-800 mb-1">⚠️ Selecciona una organización primero</p>
+          <p className="text-sm text-amber-700">Usa el panel izquierdo para elegir una organización.</p>
+          <Link href="/admin" className="mt-3 inline-block text-sm text-teal-700 underline">← Volver</Link>
+        </div>
+      </div>
+    );
+  }
+
   const sp = await searchParams;
 
   const professionals = await prisma.professional.findMany({
@@ -39,7 +48,7 @@ export default async function AdminAvailabilityPage({
 
   const selectedId = sp.professionalId ?? professionals[0]?.id;
 
-  const [rules, blackouts] = selectedId
+  const [rules, blackouts, schedules] = selectedId
     ? await Promise.all([
         prisma.availabilityRule.findMany({
           where: { professionalId: selectedId, active: true },
@@ -50,8 +59,18 @@ export default async function AdminAvailabilityPage({
           orderBy: { date: "asc" },
           take: 20,
         }),
+        prisma.availabilitySchedule.findMany({
+          where: { professionalId: selectedId },
+          orderBy: { createdAt: "asc" },
+          include: {
+            availabilityRules: {
+              where: { active: true },
+              orderBy: { dayOfWeek: "asc" },
+            },
+          },
+        }),
       ])
-    : [[], []];
+    : [[], [], []];
 
   return (
     <div className="flex flex-col gap-6">
@@ -59,22 +78,40 @@ export default async function AdminAvailabilityPage({
 
       {/* Selector de profesional */}
       <form className="flex gap-3">
-        <select name="professionalId" defaultValue={selectedId}
+        <select
+          name="professionalId"
+          defaultValue={selectedId}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white"
-          onChange={undefined}>
-          {professionals.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        >
+          {professionals.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
         </select>
-        <button type="submit"
-          className="bg-teal-700 hover:bg-teal-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+        <button
+          type="submit"
+          className="bg-teal-700 hover:bg-teal-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+        >
           Ver
         </button>
       </form>
 
       {selectedId && (
-        <AvailabilityForm
+        <AvailabilityTabs
           professionalId={selectedId}
-          rules={rules.map(r => ({ ...r, slotDurationMinutes: r.slotDurationMinutes }))}
+          rules={rules.map(r => ({
+            ...r,
+            scheduleId: r.scheduleId ?? null,
+          }))}
           blackouts={blackouts.map(b => ({ ...b, date: b.date.toISOString() }))}
+          schedules={schedules.map(s => ({
+            ...s,
+            validFrom: s.validFrom ? s.validFrom.toISOString().slice(0, 10) : null,
+            validTo:   s.validTo   ? s.validTo.toISOString().slice(0, 10)   : null,
+            availabilityRules: s.availabilityRules.map(r => ({
+              ...r,
+              scheduleId: r.scheduleId ?? null,
+            })),
+          }))}
           days={DAYS}
         />
       )}
