@@ -32,7 +32,7 @@ export default async function ConfirmacionPage({ params, searchParams }: Props) 
   if (!booking) notFound();
 
   const tz = org.timezone ?? "America/Guayaquil";
-  const localDate = toZonedTime(booking.scheduledAt, tz);
+  const localDate = toZonedTime(booking.startTime, tz);
   const dateStr = format(localDate, "EEEE d 'de' MMMM 'de' yyyy", { locale: es });
   const timeStr = format(localDate, "HH:mm");
 
