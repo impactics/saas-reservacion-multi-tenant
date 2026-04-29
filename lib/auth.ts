@@ -1,12 +1,13 @@
 /**
  * Configuración de NextAuth / Auth.js
  *
- * Proveedores:
- *   - Google OAuth (para login de admins)
- *   - CredentialsProvider (email + password como fallback)
+ * Niveles de acceso:
+ *  1. SUPERADMIN  — emails en ADMIN_EMAILS (env var, separados por coma)
+ *                   Pueden ver y gestionar CUALQUIER organización.
+ *                   No necesitan un registro en `professionals`.
  *
- * La sesión incluye organizationId del admin para que las rutas
- * del panel puedan hacer queries filtradas por org.
+ *  2. ORG ADMIN   — debe existir en `professionals` con ese email y active=true.
+ *                   Solo ven su propia organización.
  */
 
 import type { NextAuthOptions } from "next-auth";
@@ -22,18 +23,29 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       image?: string | null;
-      organizationId: string;
+      organizationId: string; // 'superadmin' | cuid
+      isSuperAdmin: boolean;
     };
   }
   interface User {
     organizationId?: string;
+    isSuperAdmin?: boolean;
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
     organizationId?: string;
+    isSuperAdmin?: boolean;
   }
+}
+
+/** Emails con acceso total — leer desde variable de entorno */
+function getSuperAdminEmails(): string[] {
+  return (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 export const authOptions: NextAuthOptions = {
@@ -41,37 +53,46 @@ export const authOptions: NextAuthOptions = {
 
   providers: [
     GoogleProvider({
-      clientId: process.env.AUTH_GOOGLE_ID ?? "",
+      clientId:     process.env.AUTH_GOOGLE_ID     ?? "",
       clientSecret: process.env.AUTH_GOOGLE_SECRET ?? "",
     }),
 
     CredentialsProvider({
       name: "Email y contraseña",
       credentials: {
-        email: { label: "Email", type: "email" },
+        email:    { label: "Email",      type: "email"    },
         password: { label: "Contraseña", type: "password" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        // Buscar admin en la tabla de professionals por email
-        // (puedes crear una tabla Admin separada si necesitas más control)
+        const email = credentials.email.toLowerCase();
+
+        // Superadmin por credenciales (poco común, pero por si acaso)
+        if (getSuperAdminEmails().includes(email)) {
+          return {
+            id:             "superadmin",
+            name:           "Super Admin",
+            email:          credentials.email,
+            organizationId: "superadmin",
+            isSuperAdmin:   true,
+          };
+        }
+
+        // Org admin: buscar en professionals
         const prof = await prisma.professional.findFirst({
-          where: { email: credentials.email, active: true },
+          where: { email, active: true },
           include: { organization: true },
         });
         if (!prof) return null;
 
-        // NOTA: En producción usar bcrypt para comparar contraseñas hasheadas.
-        // Aquí dejamos un placeholder para que el equipo lo complete.
-        // const valid = await bcrypt.compare(credentials.password, prof.passwordHash);
-        // if (!valid) return null;
-
+        // TODO produccion: reemplazar con bcrypt.compare(credentials.password, prof.passwordHash)
         return {
-          id: prof.id,
-          name: prof.name,
-          email: prof.email ?? "",
+          id:             prof.id,
+          name:           prof.name,
+          email:          prof.email ?? "",
           organizationId: prof.organizationId,
+          isSuperAdmin:   false,
         };
       },
     }),
@@ -79,35 +100,44 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async signIn({ user, account }) {
-      // Para Google OAuth: verificar que el email del admin existe en la BD
-      if (account?.provider === "google") {
-        const prof = await prisma.professional.findFirst({
-          where: { email: user.email ?? "", active: true },
-        });
-        if (!prof) return "/login?error=unauthorized";
-        user.organizationId = prof.organizationId;
+      if (account?.provider !== "google") return true;
+
+      const email = (user.email ?? "").toLowerCase();
+
+      // 1. Superadmin — acceso inmediato
+      if (getSuperAdminEmails().includes(email)) {
+        user.organizationId = "superadmin";
+        user.isSuperAdmin   = true;
+        return true;
       }
+
+      // 2. Org admin — debe existir en professionals
+      const prof = await prisma.professional.findFirst({
+        where: { email, active: true },
+      });
+      if (!prof) return "/login?error=unauthorized";
+
+      user.organizationId = prof.organizationId;
+      user.isSuperAdmin   = false;
       return true;
     },
 
     async jwt({ token, user }) {
-      if (user?.organizationId) {
-        token.organizationId = user.organizationId;
-      }
+      if (user?.organizationId) token.organizationId = user.organizationId;
+      if (user?.isSuperAdmin !== undefined) token.isSuperAdmin = user.isSuperAdmin;
       return token;
     },
 
     async session({ session, token }) {
-      if (token.organizationId) {
-        session.user.organizationId = token.organizationId;
-      }
+      session.user.organizationId = token.organizationId ?? "";
+      session.user.isSuperAdmin   = token.isSuperAdmin   ?? false;
       return session;
     },
   },
 
   pages: {
     signIn: "/login",
-    error: "/login",
+    error:  "/login",
   },
 
   session: { strategy: "jwt" },
