@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { cookies } from "next/headers";
+import { selectOrg } from "@/app/actions/select-org";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -14,8 +16,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     ? await prisma.organization.findMany({ orderBy: { name: "asc" }, select: { id: true, slug: true, name: true } })
     : [];
 
+  // Org actualmente seleccionada por el superadmin
+  const cookieStore = await cookies();
+  const selectedSlug = isSuperAdmin ? (cookieStore.get("sa-org")?.value ?? null) : null;
+  const selectedOrg = selectedSlug ? orgs.find((o) => o.slug === selectedSlug) : null;
+
   const currentOrgName = isSuperAdmin
-    ? "Super Admin"
+    ? (selectedOrg?.name ?? "Super Admin")
     : (await prisma.organization.findUnique({
         where: { id: session.user.organizationId },
         select: { name: true },
@@ -41,20 +48,29 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Super Admin</p>
             <NavLink href="/super-admin/organizations">🏢 Organizaciones</NavLink>
 
-            {/* Org switcher */}
+            {/* Org switcher — form con server action para setear cookie */}
             {orgs.length > 0 && (
               <div className="mt-2 mb-2">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Ver como org</p>
                 <div className="flex flex-col gap-0.5">
                   {orgs.map((org) => (
-                    <a
-                      key={org.id}
-                      href={`/admin?org=${org.slug}`}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-600 hover:bg-gray-100 transition-colors"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-teal-500 shrink-0" />
-                      {org.name}
-                    </a>
+                    <form key={org.id} action={selectOrg}>
+                      <input type="hidden" name="slug" value={org.slug} />
+                      <input type="hidden" name="redirectTo" value="/admin" />
+                      <button
+                        type="submit"
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors text-left ${
+                          selectedSlug === org.slug
+                            ? "bg-teal-50 text-teal-700 font-semibold"
+                            : "text-gray-600 hover:bg-gray-100"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          selectedSlug === org.slug ? "bg-teal-600" : "bg-teal-400"
+                        }`} />
+                        {org.name}
+                      </button>
+                    </form>
                   ))}
                 </div>
               </div>
