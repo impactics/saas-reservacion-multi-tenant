@@ -1,11 +1,11 @@
 /**
  * POST /api/[slug]/checkout
  *
- * Crea una sesión de pago para un booking PENDING.
+ * Crea una sesi\u00f3n de pago para un booking PENDING.
  *
  * Proveedores soportados (PAYMENT_PROVIDER en .env):
- *   payphone → { provider, paymentUrl, paymentId }
- *   paypal   → { provider, orderId, clientId, amount, currency }
+ *   payphone \u2192 { provider, paymentUrl, paymentId }
+ *   paypal   \u2192 { provider, orderId, clientId, amount, currency }
  *
  * Body: { bookingId: string, returnUrl?: string, cancelUrl?: string }
  */
@@ -21,7 +21,6 @@ const CheckoutSchema = z.object({
   cancelUrl: z.url().optional(),
 });
 
-// Preflight CORS
 export function OPTIONS(req: NextRequest) {
   return corsOptions(req);
 }
@@ -30,7 +29,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  const origin = req.headers.get("origin");
+  const origin  = req.headers.get("origin");
   const origins = getAllowedOrigins();
 
   try {
@@ -38,7 +37,7 @@ export async function POST(
     const body = CheckoutSchema.safeParse(await req.json());
     if (!body.success) {
       return withCors(
-        NextResponse.json({ error: "Datos inválidos" }, { status: 400 }),
+        NextResponse.json({ error: "Datos inv\u00e1lidos" }, { status: 400 }),
         origin, origins
       );
     }
@@ -46,7 +45,7 @@ export async function POST(
     const org = await prisma.organization.findUnique({ where: { slug } });
     if (!org) {
       return withCors(
-        NextResponse.json({ error: "Organización no encontrada" }, { status: 404 }),
+        NextResponse.json({ error: "Organizaci\u00f3n no encontrada" }, { status: 404 }),
         origin, origins
       );
     }
@@ -54,7 +53,7 @@ export async function POST(
     const booking = await prisma.booking.findFirst({
       where: { id: body.data.bookingId, organizationId: org.id },
       include: {
-        service: { select: { name: true, price: true, currency: true } },
+        service:      { select: { name: true, price: true, currency: true } },
         professional: { select: { name: true } },
       },
     });
@@ -73,9 +72,9 @@ export async function POST(
       );
     }
 
-    const price = booking.service.price ? Number(booking.service.price) : 0;
+    const price    = booking.service.price ? Number(booking.service.price) : 0;
     const currency = (booking.service.currency ?? "USD").toUpperCase();
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const appUrl   = process.env.NEXT_PUBLIC_APP_URL ?? "";
     const provider = process.env.PAYMENT_PROVIDER ?? "payphone";
 
     const returnUrl =
@@ -85,54 +84,56 @@ export async function POST(
       body.data.cancelUrl ??
       `${appUrl}/${slug}/checkout/${booking.serviceId}?bookingId=${booking.id}&error=cancelled`;
 
-    // ── PAYPHONE ─────────────────────────────────────────────────────────
+    // ── PAYPHONE ────────────────────────────────────────────────────────────────────
     if (provider === "payphone") {
       const { createPayphoneLink } = await import("@/lib/payphone");
 
       const link = await createPayphoneLink({
-        amount: Math.round(price * 100),
+        amount:              Math.round(price * 100),
         currency,
-        bookingId: booking.id,
+        bookingId:           booking.id,
         clientTransactionId: booking.id,
-        callbackUrl: `${appUrl}/api/webhooks/payment`,
-        cancellationUrl: cancelUrl,
-        reference: `${booking.service.name} — ${org.name}`,
-        email: booking.patientEmail ?? undefined,
-        phoneNumber: booking.patientPhone ?? undefined,
+        callbackUrl:         `${appUrl}/api/webhooks/payment`,
+        cancellationUrl:     cancelUrl,
+        reference:           `${booking.service.name} \u2014 ${org.name}`,
+        email:               booking.patientEmail ?? undefined,
+        phoneNumber:         booking.patientPhone ?? undefined,
       });
 
+      // paymentId no existe en Booking — guardamos el ID en paymentMethod
       await prisma.booking.update({
         where: { id: booking.id },
-        data: { paymentId: String(link.paymentId) },
+        data:  { paymentMethod: String(link.paymentId) },
       });
 
       return withCors(
         NextResponse.json({
-          provider: "payphone",
+          provider:   "payphone",
           paymentUrl: link.paymentUrl,
-          paymentId: link.paymentId,
+          paymentId:  link.paymentId,
         }),
         origin, origins
       );
     }
 
-    // ── PAYPAL ──────────────────────────────────────────────────────────────
+    // ── PAYPAL ───────────────────────────────────────────────────────────────────────
     if (provider === "paypal") {
       const { createPayPalOrder } = await import("@/lib/paypal");
 
       const orderId = await createPayPalOrder({
-        amount: price,
+        amount:      price,
         currency,
-        bookingId: booking.id,
-        description: `${booking.service.name} — ${org.name}`,
-        brandName: org.name,
+        bookingId:   booking.id,
+        description: `${booking.service.name} \u2014 ${org.name}`,
+        brandName:   org.name,
         returnUrl,
         cancelUrl,
       });
 
+      // paymentId no existe en Booking — guardamos el orderId en paymentMethod
       await prisma.booking.update({
         where: { id: booking.id },
-        data: { paymentId: orderId },
+        data:  { paymentMethod: orderId },
       });
 
       return withCors(
@@ -140,7 +141,7 @@ export async function POST(
           provider: "paypal",
           orderId,
           clientId: process.env.PAYPAL_CLIENT_ID,
-          amount: price,
+          amount:   price,
           currency,
         }),
         origin, origins
