@@ -1,5 +1,6 @@
 // ============================================================
 // Prisma Schema — SaaS Reservación Multi-Tenant
+// Prisma 7: datasource connection URL lives in prisma.config.ts
 // ============================================================
 
 generator client {
@@ -8,10 +9,8 @@ generator client {
   previewFeatures = ["driverAdapters"]
 }
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+// NOTE: No datasource block here — Prisma 7 requires the connection
+// URL to be defined in prisma.config.ts (datasource.url).
 
 // ------------------------------------------------------------
 // ENUMS
@@ -41,10 +40,10 @@ enum NotificationType {
 
 /// Tipos de plantilla de horario semanal
 enum ScheduleType {
-  NORMAL     // Semana normal de trabajo
-  HOLIDAY    // Semana de feriado (horario reducido u otro)
-  VACATION   // El profesional está de vacaciones (sin slots)
-  CUSTOM     // Cualquier otra variación nombrada
+  NORMAL
+  HOLIDAY
+  VACATION
+  CUSTOM
 }
 
 // ------------------------------------------------------------
@@ -80,13 +79,13 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
 
-  professionals           Professional[]
-  services                Service[]
-  bookings                Booking[]
-  patients                Patient[]
-  notificationJobs        NotificationJob[]
-  apiKeys                 ApiKey[]
-  availabilitySchedules   AvailabilitySchedule[]
+  professionals            Professional[]
+  services                 Service[]
+  bookings                 Booking[]
+  patients                 Patient[]
+  notificationJobs         NotificationJob[]
+  apiKeys                  ApiKey[]
+  availabilitySchedules    AvailabilitySchedule[]
   googleCalendarConnection GoogleCalendarConnection?
 
   @@map("organizations")
@@ -125,16 +124,16 @@ model Professional {
 // ------------------------------------------------------------
 
 model Service {
-  id             String  @id @default(cuid())
-  organizationId String  @map("organization_id")
-  professionalId String  @map("professional_id")
-  name           String
-  description    String?
-  imageUrl       String? @map("image_url")
-  durationMinutes Int    @map("duration_minutes")
-  price          Decimal @db.Decimal(10, 2)
-  currency       String  @default("USD")
-  active         Boolean @default(true)
+  id              String  @id @default(cuid())
+  organizationId  String  @map("organization_id")
+  professionalId  String  @map("professional_id")
+  name            String
+  description     String?
+  imageUrl        String? @map("image_url")
+  durationMinutes Int     @map("duration_minutes")
+  price           Decimal @db.Decimal(10, 2)
+  currency        String  @default("USD")
+  active          Boolean @default(true)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
@@ -190,11 +189,11 @@ model Booking {
   endTime   DateTime @map("end_time")
   notes     String?
 
-  totalAmount    Decimal? @map("total_amount")    @db.Decimal(10, 2)
-  depositAmount  Decimal? @map("deposit_amount")  @db.Decimal(10, 2)
-  paymentStatus  String?  @map("payment_status")
-  paymentMethod  String?  @map("payment_method")
-  rescheduleCount Int    @default(0) @map("reschedule_count")
+  totalAmount     Decimal? @map("total_amount")    @db.Decimal(10, 2)
+  depositAmount   Decimal? @map("deposit_amount")  @db.Decimal(10, 2)
+  paymentStatus   String?  @map("payment_status")
+  paymentMethod   String?  @map("payment_method")
+  rescheduleCount Int      @default(0) @map("reschedule_count")
 
   externalBookingId String? @map("external_booking_id")
   apiKeyId          String? @map("api_key_id")
@@ -218,26 +217,15 @@ model Booking {
 // AVAILABILITY SCHEDULE (plantillas de horario)
 // ------------------------------------------------------------
 
-/// Una plantilla de horario semanal para un profesional.
-/// Permite definir diferentes versiones del horario:
-///   - NORMAL: semana regular de trabajo
-///   - HOLIDAY: semana de feriado (puede tener menos horas o ninguna)
-///   - VACATION: el profesional está de vacaciones (sin citas)
-///   - CUSTOM: cualquier variación con nombre propio
-///
-/// Uso:
-///   - isDefault=true: se usa cuando no hay otra plantilla vigente
-///   - validFrom/validTo: rango de fechas en que esta plantilla tiene prioridad
-///   - Las reglas del horario (AvailabilityRule) apuntan a esta plantilla
 model AvailabilitySchedule {
   id             String       @id @default(cuid())
   organizationId String       @map("organization_id")
   professionalId String       @map("professional_id")
-  name           String       // ej: "Semana normal", "Feriados mayo", "Vacaciones julio 2026"
+  name           String
   scheduleType   ScheduleType @default(NORMAL) @map("schedule_type")
   isDefault      Boolean      @default(false)  @map("is_default")
-  validFrom      DateTime?    @map("valid_from") @db.Date  // NULL = sin límite de inicio
-  validTo        DateTime?    @map("valid_to")   @db.Date  // NULL = sin límite de fin
+  validFrom      DateTime?    @map("valid_from") @db.Date
+  validTo        DateTime?    @map("valid_to")   @db.Date
   active         Boolean      @default(true)
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -258,15 +246,15 @@ model AvailabilitySchedule {
 // ------------------------------------------------------------
 
 model AvailabilityRule {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  professionalId      String   @map("professional_id")
-  scheduleId          String?  @map("schedule_id")   // NULL = regla global (legado)
-  dayOfWeek           Int      @map("day_of_week")   // 0=dom, 1=lun ... 6=sab
-  startTime           String   @map("start_time")    // "08:00"
-  endTime             String   @map("end_time")      // "17:00"
-  slotDurationMinutes Int      @map("slot_duration_minutes")
-  active              Boolean  @default(true)
+  id                  String  @id @default(cuid())
+  organizationId      String  @map("organization_id")
+  professionalId      String  @map("professional_id")
+  scheduleId          String? @map("schedule_id")
+  dayOfWeek           Int     @map("day_of_week")
+  startTime           String  @map("start_time")
+  endTime             String  @map("end_time")
+  slotDurationMinutes Int     @map("slot_duration_minutes")
+  active              Boolean @default(true)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
@@ -282,7 +270,7 @@ model AvailabilityRule {
 }
 
 // ------------------------------------------------------------
-// BLACKOUT DATE (días/horas bloqueadas individualmente)
+// BLACKOUT DATE
 // ------------------------------------------------------------
 
 model BlackoutDate {
@@ -331,13 +319,13 @@ model NotificationJob {
 // ------------------------------------------------------------
 
 model ApiKey {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
+  id             String    @id @default(cuid())
+  organizationId String    @map("organization_id")
   name           String
-  keyHash        String   @unique @map("key_hash")
-  keyPrefix      String   @map("key_prefix")
-  allowedOrigins String[] @map("allowed_origins")
-  active         Boolean  @default(true)
+  keyHash        String    @unique @map("key_hash")
+  keyPrefix      String    @map("key_prefix")
+  allowedOrigins String[]  @map("allowed_origins")
+  active         Boolean   @default(true)
   lastUsedAt     DateTime? @map("last_used_at")
 
   createdAt DateTime @default(now()) @map("created_at")
