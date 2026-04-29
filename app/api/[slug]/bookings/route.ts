@@ -12,7 +12,6 @@ const CreateBookingSchema = z.object({
   startTime: z.iso.datetime(),
 });
 
-// Preflight CORS
 export function OPTIONS(req: NextRequest) {
   return corsOptions(req);
 }
@@ -40,9 +39,7 @@ export async function POST(
       );
     }
 
-    const org = await prisma.organization.findUnique({
-      where: { slug },
-    });
+    const org = await prisma.organization.findUnique({ where: { slug } });
     if (!org) {
       return withCors(
         NextResponse.json({ error: "Organizaci\u00f3n no encontrada" }, { status: 404 }),
@@ -52,11 +49,7 @@ export async function POST(
     }
 
     const service = await prisma.service.findFirst({
-      where: {
-        id: parsed.data.serviceId,
-        organizationId: org.id,
-        active: true,
-      },
+      where: { id: parsed.data.serviceId, organizationId: org.id, active: true },
     });
     if (!service) {
       return withCors(
@@ -67,16 +60,15 @@ export async function POST(
     }
 
     const startTime = new Date(parsed.data.startTime);
+    const endTime = new Date(startTime.getTime() + service.durationMinutes * 60000);
 
-    // Bloquea el slot si ya hay una reserva PENDING o CONFIRMED en ese horario.
+    // Conflict check using startTime/endTime (no durationMinutes on Booking)
     const conflict = await prisma.booking.findFirst({
       where: {
         professionalId: parsed.data.professionalId,
         status: { in: ["PENDING", "CONFIRMED"] },
-        startTime: {
-          gte: startTime,
-          lt: new Date(startTime.getTime() + service.durationMinutes * 60000),
-        },
+        startTime: { lt: endTime },
+        endTime:   { gt: startTime },
       },
     });
     if (conflict) {
@@ -87,7 +79,6 @@ export async function POST(
       );
     }
 
-    // Crea la reserva en estado PENDING con paymentStatus UNPAID.
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
@@ -97,17 +88,13 @@ export async function POST(
         patientEmail: parsed.data.patientEmail,
         patientPhone: parsed.data.patientPhone,
         startTime,
-        durationMinutes: service.durationMinutes,
+        endTime,
         status: "PENDING",
         paymentStatus: "UNPAID",
       },
     });
 
-    return withCors(
-      NextResponse.json({ booking }, { status: 201 }),
-      origin,
-      origins
-    );
+    return withCors(NextResponse.json({ booking }, { status: 201 }), origin, origins);
   } catch (err) {
     console.error("[bookings] POST error", err);
     return withCors(

@@ -60,6 +60,7 @@ export async function GET(
     where: { professionalId, dayOfWeek, active: true },
   });
 
+  // Fetch bookings with startTime + endTime (no durationMinutes on Booking model)
   const bookings = await prisma.booking.findMany({
     where: {
       professionalId,
@@ -69,7 +70,7 @@ export async function GET(
       },
       status: { notIn: ["CANCELLED"] },
     },
-    select: { startTime: true, durationMinutes: true },
+    select: { startTime: true, endTime: true },
   });
 
   const slots: { start: string; localStart: string; localEnd: string }[] = [];
@@ -86,9 +87,10 @@ export async function GET(
       );
       const slotEnd = new Date(slotStart.getTime() + rule.slotDurationMinutes * 60000);
 
+      // Use endTime from booking directly — no durationMinutes on Booking
       const isTaken = bookings.some((b) => {
         const bs = b.startTime.getTime();
-        const be = bs + b.durationMinutes * 60000;
+        const be = b.endTime.getTime();
         const ss = slotStart.getTime();
         const se = slotEnd.getTime();
         return ss < be && se > bs;
@@ -98,10 +100,10 @@ export async function GET(
         slots.push({
           start: slotStart.toISOString(),
           localStart: slotStart.toLocaleTimeString("es-EC", {
-            hour: "2-digit", minute: "2-digit", timeZone: org.timezone,
+            hour: "2-digit", minute: "2-digit", timeZone: org.timezone ?? "America/Guayaquil",
           }),
           localEnd: slotEnd.toLocaleTimeString("es-EC", {
-            hour: "2-digit", minute: "2-digit", timeZone: org.timezone,
+            hour: "2-digit", minute: "2-digit", timeZone: org.timezone ?? "America/Guayaquil",
           }),
         });
       }

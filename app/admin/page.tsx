@@ -1,16 +1,12 @@
 /**
  * Dashboard principal del admin
- * KPIs: reservas hoy, esta semana, pendientes, completadas
- * Lista de próximas reservas (próximas 24h)
  */
-
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { startOfDay, endOfDay, addDays, startOfWeek, endOfWeek } from "date-fns";
+import { startOfDay, endOfDay, addDays, startOfWeek, endOfWeek, format } from "date-fns";
 import { toZonedTime } from "date-fns-tz";
-import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import Link from "next/link";
 
@@ -62,70 +58,115 @@ export default async function AdminDashboardPage() {
     ]);
 
   const kpis = [
-    { label: "Citas hoy", value: bookingsToday, color: "text-teal-700", bg: "bg-teal-50" },
-    { label: "Esta semana", value: bookingsWeek, color: "text-blue-700", bg: "bg-blue-50" },
-    { label: "Pendientes", value: bookingsPending, color: "text-yellow-700", bg: "bg-yellow-50" },
-    { label: "Completadas", value: bookingsCompleted, color: "text-gray-600", bg: "bg-gray-100" },
+    {
+      label: "Citas hoy",
+      value: bookingsToday,
+      color: "text-teal-700",
+      bg: "bg-teal-50",
+      border: "border-teal-100",
+      icon: "\ud83d\udcc5",
+      href: "/admin/bookings",
+    },
+    {
+      label: "Esta semana",
+      value: bookingsWeek,
+      color: "text-blue-700",
+      bg: "bg-blue-50",
+      border: "border-blue-100",
+      icon: "\ud83d\udcc6",
+      href: "/admin/bookings",
+    },
+    {
+      label: "Pendientes de confirmar",
+      value: bookingsPending,
+      color: bookingsPending > 0 ? "text-amber-700" : "text-gray-500",
+      bg: bookingsPending > 0 ? "bg-amber-50" : "bg-gray-50",
+      border: bookingsPending > 0 ? "border-amber-100" : "border-gray-100",
+      icon: "\u23f3",
+      href: "/admin/bookings?status=PENDING",
+    },
+    {
+      label: "Completadas",
+      value: bookingsCompleted,
+      color: "text-gray-600",
+      bg: "bg-gray-50",
+      border: "border-gray-100",
+      icon: "\u2713",
+      href: "/admin/bookings?status=COMPLETED",
+    },
   ];
+
+  const statusMap: Record<string, { label: string; cls: string; dot: string }> = {
+    CONFIRMED: { label: "Confirmada", cls: "bg-teal-50 text-teal-700",   dot: "bg-teal-500" },
+    PENDING:   { label: "Pendiente",  cls: "bg-amber-50 text-amber-700", dot: "bg-amber-400" },
+  };
 
   return (
     <div className="flex flex-col gap-8">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">{org?.name}</p>
+        <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
+        <p className="text-sm text-gray-500 mt-0.5">{org?.name} \u00b7 {format(nowLocal, "EEEE d 'de' MMMM", { locale: es })}</p>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {kpis.map((k) => (
-          <div key={k.label} className={`rounded-xl p-5 flex flex-col gap-1 ${k.bg}`}>
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{k.label}</span>
+          <Link key={k.label} href={k.href}
+            className={`rounded-xl p-5 flex flex-col gap-2 border ${k.bg} ${k.border} hover:shadow-sm transition-shadow`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide leading-tight">{k.label}</span>
+              <span className="text-lg">{k.icon}</span>
+            </div>
             <span className={`text-3xl font-bold tabular-nums ${k.color}`}>{k.value}</span>
-          </div>
+          </Link>
         ))}
       </div>
 
-      {/* Próximas 24h */}
+      {/* Pr\u00f3ximas 24h */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-800">Próximas 24 horas</h2>
-          <Link href="/admin/bookings" className="text-sm text-teal-700 hover:underline">Ver todas →</Link>
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Pr\u00f3ximas citas</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Pr\u00f3ximas 24 horas</p>
+          </div>
+          <Link href="/admin/bookings" className="text-sm text-teal-700 hover:underline font-medium">Ver todas \u2192</Link>
         </div>
 
         {upcomingBookings.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400 text-sm">
-            No hay citas en las próximas 24 horas
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <div className="text-4xl mb-3">\u2705</div>
+            <p className="text-gray-500 font-medium">Todo al d\u00eda</p>
+            <p className="text-gray-400 text-sm mt-1">No hay citas pendientes en las pr\u00f3ximas 24 horas</p>
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="text-left px-4 py-3">Paciente</th>
-                  <th className="text-left px-4 py-3">Servicio</th>
-                  <th className="text-left px-4 py-3">Profesional</th>
-                  <th className="text-left px-4 py-3">Hora</th>
-                  <th className="text-left px-4 py-3">Estado</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Hora</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Paciente</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Servicio</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Profesional</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {upcomingBookings.map((b) => {
                   const local = toZonedTime(b.startTime, tz);
-                  const statusMap: Record<string, { label: string; cls: string }> = {
-                    CONFIRMED: { label: "Confirmada", cls: "bg-teal-50 text-teal-700" },
-                    PENDING: { label: "Pendiente", cls: "bg-yellow-50 text-yellow-700" },
-                  };
-                  const st = statusMap[b.status] ?? { label: b.status, cls: "bg-gray-100 text-gray-600" };
+                  const st = statusMap[b.status] ?? { label: b.status, cls: "bg-gray-100 text-gray-600", dot: "bg-gray-400" };
                   return (
                     <tr key={b.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 tabular-nums">
+                        <span className="font-semibold text-gray-900 text-base">{format(local, "HH:mm")}</span>
+                        <div className="text-xs text-gray-400">{format(local, "EEE d MMM", { locale: es })}</div>
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900">{b.patientName}</td>
                       <td className="px-4 py-3 text-gray-600">{b.service.name}</td>
                       <td className="px-4 py-3 text-gray-600">{b.professional.name}</td>
-                      <td className="px-4 py-3 tabular-nums text-gray-700">
-                        {format(local, "HH:mm")}
-                      </td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${st.cls}`}>
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${st.cls}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
                           {st.label}
                         </span>
                       </td>
