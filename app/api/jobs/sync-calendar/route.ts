@@ -13,9 +13,8 @@ export async function POST(req: NextRequest) {
   const body = await req.text();
   const signature = req.headers.get("upstash-signature") ?? "";
   const isValid = await qstashReceiver.verify({ signature, body });
-  if (!isValid) {
-    return NextResponse.json({ error: "Firma inválida" }, { status: 401 });
-  }
+  if (!isValid)
+    return NextResponse.json({ error: "Firma inv\u00e1lida" }, { status: 401 });
 
   const payload: Payload = JSON.parse(body);
   const { notificationJobId } = payload;
@@ -29,73 +28,77 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  if (!job || job.status === "SENT") {
+  if (!job || job.status === "SENT")
     return NextResponse.json({ skipped: true });
-  }
 
   if (!job.booking.organization.googleCalendarEnabled) {
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", lastError: "Google Calendar no habilitado" },
+      // lastError no existe en el schema — campo correcto: "error"
+      data: { status: "FAILED", error: "Google Calendar no habilitado" },
     });
     return NextResponse.json({ skipped: true });
   }
 
   const { booking } = job;
+  // durationMinutes no existe en Booking — viene del Service relacionado
+  const durationMinutes = booking.service.durationMinutes;
 
   try {
-    if (job.type === "BOOKING_CANCELLED") {
-      // Eliminar evento del calendario si existe
-      if (booking.googleEventId) {
+    // BOOKING_CANCELLATION es el valor correcto del enum NotificationType
+    if (job.type === "BOOKING_CANCELLATION") {
+      if (booking.externalBookingId) {
         await deleteCalendarEvent({
           organizationId: booking.organizationId,
-          eventId: booking.googleEventId,
+          eventId:        booking.externalBookingId,
         });
         await prisma.booking.update({
           where: { id: booking.id },
-          data: { googleEventId: null },
+          data:  { externalBookingId: null },
         });
       }
     } else {
-      // Crear o actualizar evento (CONFIRMED o RESCHEDULED)
+      // Crear o actualizar evento (BOOKING_CONFIRMATION o BOOKING_RESCHEDULE)
       const eventId = await upsertCalendarEvent({
         organizationId: booking.organizationId,
-        summary: `${booking.service.name} — ${booking.patientName}`,
+        summary:        `${booking.service.name} \u2014 ${booking.patientName}`,
         description: [
           `Paciente: ${booking.patientName}`,
-          `Teléfono: ${booking.patientPhone}`,
+          `Tel\u00e9fono: ${booking.patientPhone ?? "N/A"}`,
           booking.patientEmail ? `Email: ${booking.patientEmail}` : "",
           `Servicio: ${booking.service.name}`,
-          `Duración: ${booking.durationMinutes} min`,
+          `Duraci\u00f3n: ${durationMinutes} min`,
         ]
           .filter(Boolean)
           .join("\n"),
-        startAt: booking.scheduledAt,
-        durationMinutes: booking.durationMinutes,
-        attendeeEmail: booking.patientEmail ?? undefined,
-        eventId: booking.googleEventId ?? undefined,
+        // scheduledAt no existe — usar startTime
+        startAt:         booking.startTime,
+        durationMinutes: durationMinutes,
+        attendeeEmail:   booking.patientEmail ?? undefined,
+        // googleEventId no existe en Booking — usar externalBookingId
+        eventId:         booking.externalBookingId ?? undefined,
       });
 
-      // Persistir el eventId de Google Calendar en la reserva
       await prisma.booking.update({
         where: { id: booking.id },
-        data: { googleEventId: eventId },
+        data:  { externalBookingId: eventId },
       });
     }
 
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "SENT" },
+      data:  { status: "SENT", sentAt: new Date() },
     });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // attempts no existe en el schema — solo status y error
     await prisma.notificationJob.update({
       where: { id: notificationJobId },
-      data: { status: "FAILED", lastError: errorMessage, attempts: { increment: 1 } },
+      data:  { status: "FAILED", error: errorMsg },
     });
-    console.error("[sync-calendar] error", errorMessage);
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    console.error("[sync-calendar] error", errorMsg);
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }
