@@ -42,7 +42,7 @@ export async function createPayPalOrder({
   const client = getClient();
   const ordersController = new OrdersController(client);
 
-  const response = await ordersController.createOrder({
+  const response = await ordersController.ordersCreate({
     body: {
       intent: "CAPTURE",
       purchaseUnits: [
@@ -70,7 +70,7 @@ export async function createPayPalOrder({
     },
   });
 
-  const orderId = (response.result as { id?: string }).id;
+  const orderId = response.result?.id;
   if (!orderId) throw new Error("PayPal did not return an order ID");
   return orderId;
 }
