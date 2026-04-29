@@ -1,25 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { qstashReceiver, publishJob } from "@/lib/qstash";
 import { prisma } from "@/lib/prisma";
-import { enqueueNotification } from "@/lib/notifications";
 
 export const runtime = "nodejs";
 
 /**
- * Este job lo dispara un cron de QStash (ej: cada hora).
- * Busca NotificationJobs de tipo REMINDER_24H pendientes cuya
- * scheduledFor ya lleg\u00f3, y los despacha al worker de WhatsApp.
+ * POST /api/jobs/reminder
  *
- * Tambi\u00e9n se puede llamar directamente con un payload
- * { notificationJobId } para procesar un reminder espec\u00edfico.
+ * Cron de QStash (ej: cada hora).
+ * Busca NotificationJobs BOOKING_REMINDER pendientes cuya scheduledFor lleg\u00f3,
+ * y los despacha al worker de notificaciones.
+ *
+ * Tambi\u00e9n acepta { notificationJobId } para procesar un reminder espec\u00edfico.
  */
 export async function POST(req: NextRequest) {
   const body = await req.text();
   const signature = req.headers.get("upstash-signature") ?? "";
-  const isValid = await qstashReceiver.verify({ signature, body });
-  if (!isValid) {
+  const isValid   = await qstashReceiver.verify({ signature, body });
+  if (!isValid)
     return NextResponse.json({ error: "Firma inv\u00e1lida" }, { status: 401 });
-  }
 
   const payload = body.trim().length > 2 ? JSON.parse(body) : {};
 
@@ -33,8 +32,8 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const pendingReminders = await prisma.notificationJob.findMany({
     where: {
-      type: "REMINDER_24H",
-      status: "PENDING",
+      type:         "BOOKING_REMINDER",   // REMINDER_24H no existe en el enum
+      status:       "PENDING",
       scheduledFor: { lte: now },
     },
     select: { id: true },
@@ -50,10 +49,8 @@ export async function POST(req: NextRequest) {
 
 async function dispatchReminder(notificationJobId: string) {
   const job = await prisma.notificationJob.findUnique({
-    where: { id: notificationJobId },
-    include: {
-      booking: { include: { organization: true } },
-    },
+    where:  { id: notificationJobId },
+    select: { status: true, id: true },
   });
 
   if (!job || job.status !== "PENDING") return;
@@ -61,22 +58,12 @@ async function dispatchReminder(notificationJobId: string) {
   // Marcar como procesando para evitar doble disparo
   await prisma.notificationJob.update({
     where: { id: notificationJobId },
-    data: { status: "PROCESSING" },
+    data:  { status: "PROCESSING" },
   });
 
-  // Publicar al worker de WhatsApp
+  // Publicar al worker de notificaciones
   await publishJob({
-    path: "/api/jobs/notify-whatsapp",
-    body: { notificationJobId },
+    path: "/api/workers/notifications",
+    body: { jobId: notificationJobId },
   });
-
-  // Si la org tiene email habilitado y el paciente tiene email, tambi\u00e9n email
-  if (job.booking.patientEmail && job.booking.organization.emailEnabled) {
-    await enqueueNotification({
-      organizationId: job.booking.organizationId,
-      bookingId: job.booking.id,
-      type: "REMINDER_24H",
-      channel: "EMAIL",
-    });
-  }
 }

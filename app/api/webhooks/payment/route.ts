@@ -1,21 +1,19 @@
 /**
  * POST /api/webhooks/payment
  *
- * Receptor único para eventos de pago.
+ * Receptor \u00fanico para eventos de pago.
  * Proveedores: Payphone y PayPal.
  *
  * PAYPHONE
  *   Body: { clientTransactionId, transactionStatus, id }
- *   Verificamos con POST /api/button/Payments/verify
  *   clientTransactionId === bookingId
  *
  * PAYPAL
  *   Header: paypal-transmission-sig + paypal-cert-url
  *   Evento: PAYMENT.CAPTURE.COMPLETED
- *   Verificación de firma vía REST API de PayPal (sin SDK viejo)
  *   resource.purchase_units[0].custom_id === bookingId
  *
- * Idempotencia: booking ya PAID → 200 sin reprocesar.
+ * Idempotencia: booking ya PAID \u2192 200 sin reprocesar.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -28,24 +26,22 @@ export async function POST(req: NextRequest) {
   return handlePayphone(req);
 }
 
-// ── PAYPHONE ──────────────────────────────────────────────────────────────────
-
+// \u2500\u2500 PAYPHONE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 async function handlePayphone(req: NextRequest) {
   let body: {
     clientTransactionId?: string;
-    transactionStatus?: number;
-    id?: string | number;
+    transactionStatus?:   number;
+    id?:                  string | number;
   };
 
   try { body = await req.json(); }
-  catch { return NextResponse.json({ error: "Body inválido" }, { status: 400 }); }
+  catch { return NextResponse.json({ error: "Body inv\u00e1lido" }, { status: 400 }); }
 
-  if (!body.clientTransactionId) {
+  if (!body.clientTransactionId)
     return NextResponse.json({ error: "Proveedor no reconocido" }, { status: 400 });
-  }
 
   const bookingId = body.clientTransactionId;
-  const rawId = String(body.id ?? "");
+  const rawId     = String(body.id ?? "");
 
   try {
     const { verifyPayphonePayment } = await import("@/lib/payphone");
@@ -56,7 +52,7 @@ async function handlePayphone(req: NextRequest) {
       return NextResponse.json({ received: true });
     }
 
-    await confirmBooking(bookingId, result.paymentId);
+    await confirmBooking(bookingId, String(result.paymentId));
   } catch (err) {
     console.error("[webhook/payment] Payphone error", err);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
@@ -65,26 +61,23 @@ async function handlePayphone(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-// ── PAYPAL ──────────────────────────────────────────────────────────────────
-
+// \u2500\u2500 PAYPAL \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 async function handlePayPal(req: NextRequest) {
   const webhookId = process.env.PAYPAL_WEBHOOK_ID ?? "";
-  const rawBody = await req.text();
+  const rawBody   = await req.text();
 
-  const transmissionId  = req.headers.get("paypal-transmission-id")  ?? "";
+  const transmissionId   = req.headers.get("paypal-transmission-id")   ?? "";
   const transmissionTime = req.headers.get("paypal-transmission-time") ?? "";
-  const certUrl         = req.headers.get("paypal-cert-url")          ?? "";
-  const authAlgo        = req.headers.get("paypal-auth-algo")         ?? "";
-  const transmissionSig = req.headers.get("paypal-transmission-sig")  ?? "";
+  const certUrl          = req.headers.get("paypal-cert-url")           ?? "";
+  const authAlgo         = req.headers.get("paypal-auth-algo")          ?? "";
+  const transmissionSig  = req.headers.get("paypal-transmission-sig")  ?? "";
 
-  // Verificación de firma usando la REST API de PayPal directamente
-  // (no necesitamos el SDK viejo para esto)
   if (webhookId) {
     try {
       const tokenRes = await fetch(
         `https://api${process.env.PAYPAL_ENV === "production" ? "" : ".sandbox"}.paypal.com/v1/oauth2/token`,
         {
-          method: "POST",
+          method:  "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
             Authorization: `Basic ${Buffer.from(
@@ -99,31 +92,31 @@ async function handlePayPal(req: NextRequest) {
       const verifyRes = await fetch(
         `https://api${process.env.PAYPAL_ENV === "production" ? "" : ".sandbox"}.paypal.com/v1/notifications/verify-webhook-signature`,
         {
-          method: "POST",
+          method:  "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${access_token}`,
           },
           body: JSON.stringify({
-            transmission_id: transmissionId,
+            transmission_id:   transmissionId,
             transmission_time: transmissionTime,
-            cert_url: certUrl,
-            auth_algo: authAlgo,
-            transmission_sig: transmissionSig,
-            webhook_id: webhookId,
-            webhook_event: JSON.parse(rawBody),
+            cert_url:          certUrl,
+            auth_algo:         authAlgo,
+            transmission_sig:  transmissionSig,
+            webhook_id:        webhookId,
+            webhook_event:     JSON.parse(rawBody),
           }),
         }
       );
 
       const { verification_status } = await verifyRes.json() as { verification_status: string };
       if (verification_status !== "SUCCESS") {
-        console.warn("[webhook/payment] PayPal firma inválida");
-        return NextResponse.json({ error: "Firma inválida" }, { status: 400 });
+        console.warn("[webhook/payment] PayPal firma inv\u00e1lida");
+        return NextResponse.json({ error: "Firma inv\u00e1lida" }, { status: 400 });
       }
     } catch (err) {
-      console.error("[webhook/payment] PayPal verificación error", err);
-      return NextResponse.json({ error: "Error de verificación" }, { status: 400 });
+      console.error("[webhook/payment] PayPal verificaci\u00f3n error", err);
+      return NextResponse.json({ error: "Error de verificaci\u00f3n" }, { status: 400 });
     }
   }
 
@@ -137,11 +130,10 @@ async function handlePayPal(req: NextRequest) {
   };
 
   try { event = JSON.parse(rawBody); }
-  catch { return NextResponse.json({ error: "Body inválido" }, { status: 400 }); }
+  catch { return NextResponse.json({ error: "Body inv\u00e1lido" }, { status: 400 }); }
 
-  if (event.event_type !== "PAYMENT.CAPTURE.COMPLETED") {
+  if (event.event_type !== "PAYMENT.CAPTURE.COMPLETED")
     return NextResponse.json({ received: true });
-  }
 
   const bookingId =
     event.resource?.purchase_units?.[0]?.custom_id ??
@@ -157,11 +149,10 @@ async function handlePayPal(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-// ── confirmBooking — función compartida ────────────────────────────────────
-
-async function confirmBooking(bookingId: string, paymentId: string) {
+// \u2500\u2500 confirmBooking \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// paymentId (externo) se guarda en el campo paymentMethod del Booking
+async function confirmBooking(bookingId: string, externalPaymentId: string) {
   const existing = await prisma.booking.findUnique({
-    where: { id: bookingId },
+    where:  { id: bookingId },
     select: { paymentStatus: true },
   });
 
@@ -169,15 +160,18 @@ async function confirmBooking(bookingId: string, paymentId: string) {
     console.warn("[webhook/payment] Booking no encontrado", bookingId);
     return;
   }
-
   if (existing.paymentStatus === "PAID") {
-    console.info("[webhook/payment] Idempotente — ya confirmado", bookingId);
+    console.info("[webhook/payment] Idempotente \u2014 ya confirmado", bookingId);
     return;
   }
 
   const booking = await prisma.booking.update({
     where: { id: bookingId },
-    data: { status: "CONFIRMED", paymentStatus: "PAID", paymentId },
+    data: {
+      status:        "CONFIRMED",
+      paymentStatus: "PAID",
+      paymentMethod: externalPaymentId,  // paymentId no existe — usamos paymentMethod
+    },
     include: {
       organization: {
         select: { whatsappEnabled: true, googleCalendarEnabled: true },
@@ -185,12 +179,12 @@ async function confirmBooking(bookingId: string, paymentId: string) {
     },
   });
 
-  console.info("[webhook/payment] Booking confirmado", { bookingId, paymentId });
+  console.info("[webhook/payment] Booking confirmado", { bookingId, externalPaymentId });
 
   await enqueueBookingConfirmedJobs({
-    organizationId: booking.organizationId,
-    bookingId: booking.id,
-    scheduledAt: booking.scheduledAt,
+    organizationId:  booking.organizationId,
+    bookingId:       booking.id,
+    startTime:       booking.startTime,
     whatsappEnabled: booking.organization.whatsappEnabled,
     calendarEnabled: booking.organization.googleCalendarEnabled,
   });
