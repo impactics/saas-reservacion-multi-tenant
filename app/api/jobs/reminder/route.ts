@@ -8,22 +8,22 @@ export const runtime = "nodejs";
 /**
  * Este job lo dispara un cron de QStash (ej: cada hora).
  * Busca NotificationJobs de tipo REMINDER_24H pendientes cuya
- * scheduledFor ya llegó, y los despacha al worker de WhatsApp.
+ * scheduledFor ya lleg\u00f3, y los despacha al worker de WhatsApp.
  *
- * También se puede llamar directamente con un payload
- * { notificationJobId } para procesar un reminder específico.
+ * Tambi\u00e9n se puede llamar directamente con un payload
+ * { notificationJobId } para procesar un reminder espec\u00edfico.
  */
 export async function POST(req: NextRequest) {
   const body = await req.text();
   const signature = req.headers.get("upstash-signature") ?? "";
   const isValid = await qstashReceiver.verify({ signature, body });
   if (!isValid) {
-    return NextResponse.json({ error: "Firma inválida" }, { status: 401 });
+    return NextResponse.json({ error: "Firma inv\u00e1lida" }, { status: 401 });
   }
 
   const payload = body.trim().length > 2 ? JSON.parse(body) : {};
 
-  // Modo directo: procesar un job específico
+  // Modo directo: procesar un job espec\u00edfico
   if (payload.notificationJobId) {
     await dispatchReminder(payload.notificationJobId);
     return NextResponse.json({ ok: true });
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
       scheduledFor: { lte: now },
     },
     select: { id: true },
-    take: 50, // procesar en lotes
+    take: 50,
   });
 
   await Promise.allSettled(
@@ -70,7 +70,7 @@ async function dispatchReminder(notificationJobId: string) {
     body: { notificationJobId },
   });
 
-  // Si la org tiene email habilitado y el paciente tiene email, también email
+  // Si la org tiene email habilitado y el paciente tiene email, tambi\u00e9n email
   if (job.booking.patientEmail && job.booking.organization.emailEnabled) {
     await enqueueNotification({
       organizationId: job.booking.organizationId,

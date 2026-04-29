@@ -63,13 +63,13 @@ export async function GET(
   const bookings = await prisma.booking.findMany({
     where: {
       professionalId,
-      scheduledAt: {
+      startTime: {
         gte: new Date(`${date}T00:00:00.000Z`),
         lt:  new Date(`${date}T23:59:59.999Z`),
       },
       status: { notIn: ["CANCELLED"] },
     },
-    select: { scheduledAt: true, durationMinutes: true },
+    select: { startTime: true, durationMinutes: true },
   });
 
   const slots: { start: string; localStart: string; localEnd: string }[] = [];
@@ -87,7 +87,7 @@ export async function GET(
       const slotEnd = new Date(slotStart.getTime() + rule.slotDurationMinutes * 60000);
 
       const isTaken = bookings.some((b) => {
-        const bs = b.scheduledAt.getTime();
+        const bs = b.startTime.getTime();
         const be = bs + b.durationMinutes * 60000;
         const ss = slotStart.getTime();
         const se = slotEnd.getTime();

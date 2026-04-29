@@ -9,7 +9,7 @@ const CreateBookingSchema = z.object({
   patientName: z.string().min(2),
   patientEmail: z.email().optional(),
   patientPhone: z.string().min(7),
-  scheduledAt: z.iso.datetime(),
+  startTime: z.iso.datetime(),
 });
 
 // Preflight CORS
@@ -32,7 +32,7 @@ export async function POST(
     if (!parsed.success) {
       return withCors(
         NextResponse.json(
-          { error: "Datos inválidos", details: parsed.error.flatten() },
+          { error: "Datos inv\u00e1lidos", details: parsed.error.flatten() },
           { status: 400 }
         ),
         origin,
@@ -45,7 +45,7 @@ export async function POST(
     });
     if (!org) {
       return withCors(
-        NextResponse.json({ error: "Organización no encontrada" }, { status: 404 }),
+        NextResponse.json({ error: "Organizaci\u00f3n no encontrada" }, { status: 404 }),
         origin,
         origins
       );
@@ -66,31 +66,28 @@ export async function POST(
       );
     }
 
-    const scheduledAt = new Date(parsed.data.scheduledAt);
+    const startTime = new Date(parsed.data.startTime);
 
     // Bloquea el slot si ya hay una reserva PENDING o CONFIRMED en ese horario.
-    // El estado PENDING cubre tanto reservas sin pago como pendientes de confirmación.
-    // El campo paymentStatus (UNPAID/PAID) maneja el estado del pago por separado.
     const conflict = await prisma.booking.findFirst({
       where: {
         professionalId: parsed.data.professionalId,
         status: { in: ["PENDING", "CONFIRMED"] },
-        scheduledAt: {
-          gte: scheduledAt,
-          lt: new Date(scheduledAt.getTime() + service.durationMinutes * 60000),
+        startTime: {
+          gte: startTime,
+          lt: new Date(startTime.getTime() + service.durationMinutes * 60000),
         },
       },
     });
     if (conflict) {
       return withCors(
-        NextResponse.json({ error: "El slot ya no está disponible" }, { status: 409 }),
+        NextResponse.json({ error: "El slot ya no est\u00e1 disponible" }, { status: 409 }),
         origin,
         origins
       );
     }
 
     // Crea la reserva en estado PENDING con paymentStatus UNPAID.
-    // El webhook de pago moverá paymentStatus a PAID y el status a CONFIRMED.
     const booking = await prisma.booking.create({
       data: {
         organizationId: org.id,
@@ -99,7 +96,7 @@ export async function POST(
         patientName: parsed.data.patientName,
         patientEmail: parsed.data.patientEmail,
         patientPhone: parsed.data.patientPhone,
-        scheduledAt,
+        startTime,
         durationMinutes: service.durationMinutes,
         status: "PENDING",
         paymentStatus: "UNPAID",
