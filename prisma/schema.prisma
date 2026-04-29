@@ -52,6 +52,7 @@ model Organization {
   timezone              String   @default("America/Guayaquil")
   googleCalendarEnabled Boolean  @default(false) @map("google_calendar_enabled")
   whatsappEnabled       Boolean  @default(false) @map("whatsapp_enabled")
+  emailEnabled          Boolean  @default(false) @map("email_enabled")
 
   cancelRefundHours  Int @default(24) @map("cancel_refund_hours")
   cancelPartialHours Int @default(12) @map("cancel_partial_hours")
