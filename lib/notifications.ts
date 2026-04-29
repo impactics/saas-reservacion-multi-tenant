@@ -1,75 +1,75 @@
 import { prisma } from "./prisma";
-import type { NotificationChannel, NotificationType } from "@/app/generated/prisma/client";
+import type { NotificationType } from "@/app/generated/prisma/client";
 
 /**
  * Encola un NotificationJob en BD.
- * El worker de Upstash QStash lo procesa de forma asíncrona.
+ * El worker de Upstash QStash lo procesa de forma as\u00edncrona.
+ *
+ * Nota: el schema NO tiene un campo "channel" en NotificationJob.
+ * El tipo de canal se infiere del NotificationType en el worker.
  */
 export async function enqueueNotification({
   organizationId,
   bookingId,
   type,
-  channel,
   scheduledFor,
 }: {
   organizationId: string;
-  bookingId: string;
-  type: NotificationType;
-  channel: NotificationChannel;
-  scheduledFor?: Date;
+  bookingId:      string;
+  type:           NotificationType;
+  scheduledFor?:  Date;
 }) {
   return prisma.notificationJob.create({
     data: {
       organizationId,
       bookingId,
       type,
-      channel,
-      status: "PENDING",
-      scheduledFor: scheduledFor ?? null,
+      status:       "PENDING",
+      scheduledFor: scheduledFor ?? new Date(),
     },
   });
 }
 
 /**
- * Enqueue todas las notificaciones estándar para una reserva nueva:
- * - WhatsApp de confirmación (inmediato)
- * - Google Calendar event (inmediato)
- * - Recordatorio WhatsApp 24h antes
+ * Encola todas las notificaciones est\u00e1ndar para una reserva nueva:
+ * - Confirmaci\u00f3n WhatsApp (inmediato)
+ * - Evento Google Calendar (inmediato)
+ * - Recordatorio 24h antes
  */
 export async function enqueueBookingConfirmedJobs({
   organizationId,
   bookingId,
-  scheduledAt,
+  startTime,
   whatsappEnabled,
   calendarEnabled,
 }: {
-  organizationId: string;
-  bookingId: string;
-  scheduledAt: Date;
+  organizationId:  string;
+  bookingId:       string;
+  startTime:       Date;   // scheduledAt no existe — campo correcto: startTime
   whatsappEnabled: boolean;
   calendarEnabled: boolean;
 }) {
   const jobs = [];
 
   if (whatsappEnabled) {
+    // BOOKING_CONFIRMED no existe — valor correcto: BOOKING_CONFIRMATION
     jobs.push(
       enqueueNotification({
         organizationId,
         bookingId,
-        type: "BOOKING_CONFIRMED",
-        channel: "WHATSAPP",
+        type: "BOOKING_CONFIRMATION",
       })
     );
 
     // Recordatorio 24h antes
-    const reminder = new Date(scheduledAt.getTime() - 24 * 60 * 60 * 1000);
+    const reminder = new Date(startTime.getTime() - 24 * 60 * 60 * 1000);
     if (reminder > new Date()) {
+      // REMINDER_24H no existe — valor correcto: BOOKING_REMINDER
       jobs.push(
         enqueueNotification({
           organizationId,
           bookingId,
-          type: "REMINDER_24H",
-          channel: "WHATSAPP",
+          type:         "BOOKING_REMINDER",
           scheduledFor: reminder,
         })
       );
@@ -81,8 +81,7 @@ export async function enqueueBookingConfirmedJobs({
       enqueueNotification({
         organizationId,
         bookingId,
-        type: "BOOKING_CONFIRMED",
-        channel: "CALENDAR",
+        type: "BOOKING_CONFIRMATION",
       })
     );
   }
