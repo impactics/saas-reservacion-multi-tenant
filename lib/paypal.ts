@@ -6,6 +6,7 @@ import {
   Client,
   Environment,
   OrdersController,
+  CheckoutPaymentIntent,
 } from "@paypal/paypal-server-sdk";
 
 function getClient() {
@@ -44,7 +45,7 @@ export async function createPayPalOrder({
 
   const response = await ordersController.ordersCreate({
     body: {
-      intent: "CAPTURE",
+      intent: CheckoutPaymentIntent.Capture,
       purchaseUnits: [
         {
           referenceId: bookingId,
