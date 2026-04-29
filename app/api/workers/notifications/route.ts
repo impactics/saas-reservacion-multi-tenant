@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
         await sendWhatsAppText(booking.patientPhone, message);
 
         // Notificar también a la organización si tiene número configurado
-        const orgPhone = booking.organization.whatsappPhone;
+        const orgPhone = booking.organization.phoneWhatsapp;
         if (orgPhone && job.type === "BOOKING_CONFIRMED") {
           const orgMsg =
             `📬 *Nueva reserva recibida*\n\n` +
