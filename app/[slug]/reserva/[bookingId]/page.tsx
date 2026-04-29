@@ -29,10 +29,10 @@ export default async function ReservaDetailPage({ params }: Props) {
   if (!booking) notFound();
 
   const tz = org.timezone ?? "America/Guayaquil";
-  const localDate = toZonedTime(booking.scheduledAt, tz);
+  const localDate = toZonedTime(booking.startTime, tz);
   const dateStr = format(localDate, "EEEE d 'de' MMMM 'de' yyyy", { locale: es });
   const timeStr = format(localDate, "HH:mm");
-  const isPast = booking.scheduledAt < new Date();
+  const isPast = booking.startTime < new Date();
   const isCancelled = booking.status === "CANCELLED";
 
   const statusLabels: Record<string, { label: string; className: string }> = {
