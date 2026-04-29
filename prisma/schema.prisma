@@ -5,12 +5,11 @@
 // ============================================================
 
 generator client {
-  provider        = "prisma-client-js"
-  output          = "../app/generated/prisma"
-  previewFeatures = ["driverAdapters"]
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
 }
 
-// Prisma 7 + driverAdapters: solo el provider, sin url.
+// Prisma 7: solo el provider, sin url.
 // La URL de conexión va en prisma.config.ts → datasource.url
 datasource db {
   provider = "postgresql"
@@ -312,9 +311,11 @@ model NotificationJob {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
 
-  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
+  @@index([organizationId])
   @@map("notification_jobs")
 }
 
