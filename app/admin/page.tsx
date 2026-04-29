@@ -35,10 +35,10 @@ export default async function AdminDashboardPage() {
   const [bookingsToday, bookingsWeek, bookingsPending, bookingsCompleted, upcomingBookings] =
     await Promise.all([
       prisma.booking.count({
-        where: { organizationId: orgId, scheduledAt: { gte: todayStart, lte: todayEnd } },
+        where: { organizationId: orgId, startTime: { gte: todayStart, lte: todayEnd } },
       }),
       prisma.booking.count({
-        where: { organizationId: orgId, scheduledAt: { gte: weekStart, lte: weekEnd } },
+        where: { organizationId: orgId, startTime: { gte: weekStart, lte: weekEnd } },
       }),
       prisma.booking.count({
         where: { organizationId: orgId, status: "PENDING" },
@@ -49,14 +49,14 @@ export default async function AdminDashboardPage() {
       prisma.booking.findMany({
         where: {
           organizationId: orgId,
-          scheduledAt: { gte: nowLocal, lte: next24h },
+          startTime: { gte: nowLocal, lte: next24h },
           status: { in: ["PENDING", "CONFIRMED"] },
         },
         include: {
           service: { select: { name: true } },
           professional: { select: { name: true } },
         },
-        orderBy: { scheduledAt: "asc" },
+        orderBy: { startTime: "asc" },
         take: 10,
       }),
     ]);
@@ -110,7 +110,7 @@ export default async function AdminDashboardPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {upcomingBookings.map((b) => {
-                  const local = toZonedTime(b.scheduledAt, tz);
+                  const local = toZonedTime(b.startTime, tz);
                   const statusMap: Record<string, { label: string; cls: string }> = {
                     CONFIRMED: { label: "Confirmada", cls: "bg-teal-50 text-teal-700" },
                     PENDING: { label: "Pendiente", cls: "bg-yellow-50 text-yellow-700" },

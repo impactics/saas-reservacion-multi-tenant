@@ -54,7 +54,7 @@ export default async function AdminBookingsPage({
   if (sp.professionalId) where.professionalId = sp.professionalId;
   if (sp.date) {
     const d = new Date(sp.date);
-    where.scheduledAt = {
+    where.startTime = {
       gte: new Date(d.setHours(0, 0, 0, 0)),
       lte: new Date(d.setHours(23, 59, 59, 999)),
     };
@@ -67,7 +67,7 @@ export default async function AdminBookingsPage({
         service: { select: { name: true } },
         professional: { select: { name: true } },
       },
-      orderBy: { scheduledAt: "desc" },
+      orderBy: { startTime: "desc" },
       skip,
       take: PER_PAGE,
     }),
@@ -137,7 +137,7 @@ export default async function AdminBookingsPage({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {bookings.map((b) => {
-                  const local = toZonedTime(b.scheduledAt, tz);
+                  const local = toZonedTime(b.startTime, tz);
                   const st = statusMap[b.status] ?? { label: b.status, cls: "bg-gray-100 text-gray-600" };
                   return (
                     <tr key={b.id} className="hover:bg-gray-50 transition-colors">
