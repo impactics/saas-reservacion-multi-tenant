@@ -107,6 +107,9 @@ model Professional {
   bio            String?
   avatarUrl      String? @map("avatar_url")
   active         Boolean @default(true)
+  /// Hash bcrypt de la contraseña para login por credenciales.
+  /// NULL = solo puede autenticarse via Google OAuth.
+  passwordHash   String? @map("password_hash")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt      @map("updated_at")
@@ -168,6 +171,7 @@ model Patient {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   bookings     Booking[]
 
+  @@unique([organizationId, phone])
   @@index([organizationId])
   @@map("patients")
 }
@@ -349,7 +353,9 @@ model ApiKey {
 model GoogleCalendarConnection {
   id             String    @id @default(cuid())
   organizationId String    @unique @map("organization_id")
+  /// Cifrado con AES-256. Nunca almacenar en texto plano.
   accessToken    String    @map("access_token")
+  /// Cifrado con AES-256. Nunca almacenar en texto plano.
   refreshToken   String?   @map("refresh_token")
   expiresAt      DateTime? @map("expires_at")
   calendarId     String?   @map("calendar_id")

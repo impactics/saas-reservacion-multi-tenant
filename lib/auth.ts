@@ -1,4 +1,6 @@
 /**
+ * lib/auth.ts
+ *
  * Configuración de NextAuth / Auth.js
  *
  * Niveles de acceso:
@@ -6,14 +8,17 @@
  *                   Pueden ver y gestionar CUALQUIER organización.
  *                   No necesitan un registro en `professionals`.
  *
- *  2. ORG ADMIN   — debe existir en `professionals` con ese email y active=true.
+ *  2. ORG ADMIN   — debe existir en `professionals` con ese email, active=true
+ *                   y passwordHash configurado.
  *                   Solo ven su propia organización.
  */
 
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { loginSchema } from "@/lib/schemas";
 
 // Extend session types
 declare module "next-auth" {
@@ -64,29 +69,52 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Contraseña", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
+        // Validar shape con Zod antes de cualquier lógica
+        const parsed = loginSchema.safeParse(credentials);
+        if (!parsed.success) return null;
 
-        const email = credentials.email.toLowerCase();
+        const { email, password } = parsed.data;
 
-        // Superadmin por credenciales (poco común, pero por si acaso)
+        // Superadmin por credenciales
         if (getSuperAdminEmails().includes(email)) {
+          // El superadmin usa una contraseña de entorno dedicada
+          const superAdminPassword = process.env.SUPERADMIN_PASSWORD ?? "";
+          if (!superAdminPassword) {
+            console.error(
+              "[auth] SUPERADMIN_PASSWORD no está configurado. Login de superadmin deshabilitado."
+            );
+            return null;
+          }
+
+          const isValidSuperPassword = await compare(password, superAdminPassword);
+          if (!isValidSuperPassword) return null;
+
           return {
             id:             "superadmin",
             name:           "Super Admin",
-            email:          credentials.email,
+            email,
             organizationId: "superadmin",
             isSuperAdmin:   true,
           };
         }
 
-        // Org admin: buscar en professionals
+        // Org admin: buscar en professionals con passwordHash
         const prof = await prisma.professional.findFirst({
-          where: { email, active: true },
-          include: { organization: true },
+          where:  { email, active: true },
+          select: {
+            id:             true,
+            name:           true,
+            email:          true,
+            organizationId: true,
+            passwordHash:   true,
+          },
         });
-        if (!prof) return null;
 
-        // TODO produccion: reemplazar con bcrypt.compare(credentials.password, prof.passwordHash)
+        if (!prof || !prof.passwordHash) return null;
+
+        const isValidPassword = await compare(password, prof.passwordHash);
+        if (!isValidPassword) return null;
+
         return {
           id:             prof.id,
           name:           prof.name,
