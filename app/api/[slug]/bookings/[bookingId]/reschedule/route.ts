@@ -2,7 +2,7 @@
  * POST /api/{slug}/bookings/{bookingId}/reschedule
  *
  * Reprograma una cita a una nueva fecha/hora.
- * Verifica disponibilidad del slot, registra historial, notifica por WhatsApp.
+ * Verifica disponibilidad del slot, actualiza rescheduleCount, notifica por WhatsApp.
  *
  * Auth: cookie patient_token (paciente) O query param ?adminKey=... (admin)
  * Body: { startTime: string (ISO), reason?: string }
@@ -49,7 +49,6 @@ export async function POST(
       const payload = await verifyPatientToken(token);
       if (payload && payload.orgId === org.id) { isPatient = true; patientId = payload.patientId; }
     }
-    // accessToken no existe en el schema — solo auth por cookie
     if (!isPatient) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
@@ -58,8 +57,8 @@ export async function POST(
     where: { id: bookingId, organizationId: org.id },
     include: {
       service:      { select: { name: true, durationMinutes: true, currency: true } },
-      professional: { select: { name: true, phone: true } },
-      reschedules:  { select: { id: true } },
+      // Professional no tiene campo phone en el schema
+      professional: { select: { name: true, email: true } },
     },
   });
   if (!booking)
@@ -73,18 +72,18 @@ export async function POST(
   if (isPatient && patientId && booking.patientId !== patientId)
     return NextResponse.json({ error: "No autorizado" }, { status: 403 });
 
-  // L\u00edmite de reprogramaciones
-  if (booking.reschedules.length >= org.maxReschedules)
+  // L\u00edmite de reprogramaciones — usar rescheduleCount del propio Booking
+  if (booking.rescheduleCount >= org.maxReschedules)
     return NextResponse.json(
       { error: `Has alcanzado el l\u00edmite de ${org.maxReschedules} reprogramaci\u00f3n(es)` },
       { status: 422 }
     );
 
-  // Duración original = diferencia entre startTime y endTime guardados
-  const originalDurationMs  = booking.endTime.getTime() - booking.startTime.getTime();
-  const newStartTime        = new Date(parsed.data.startTime);
-  const newEndTime          = new Date(newStartTime.getTime() + originalDurationMs);
-  const durationMinutes     = differenceInMinutes(booking.endTime, booking.startTime);
+  // Duraci\u00f3n original = diferencia entre startTime y endTime guardados
+  const originalDurationMs = booking.endTime.getTime() - booking.startTime.getTime();
+  const newStartTime       = new Date(parsed.data.startTime);
+  const newEndTime         = new Date(newStartTime.getTime() + originalDurationMs);
+  const durationMinutes    = differenceInMinutes(booking.endTime, booking.startTime);
 
   // Verificar disponibilidad del nuevo slot (overlap check)
   const conflict = await prisma.booking.findFirst({
@@ -99,25 +98,24 @@ export async function POST(
   if (conflict)
     return NextResponse.json({ error: "El slot ya no est\u00e1 disponible" }, { status: 409 });
 
-  // ── Actualizar en transacci\u00f3n ─────────────────────────────────────────────────
+  // ── Actualizar cita ───────────────────────────────────────────────────────────
   const prevStartTime = booking.startTime;
-  await prisma.$transaction([
-    prisma.bookingReschedule.create({
-      data: {
-        organizationId:      org.id,
-        bookingId,
-        previousScheduledAt: prevStartTime,
-        newScheduledAt:      newStartTime,
-        reason:              parsed.data.reason ?? null,
-      },
-    }),
-    prisma.booking.update({
-      where: { id: bookingId },
-      data:  { startTime: newStartTime, endTime: newEndTime, status: "CONFIRMED" },
-    }),
-  ]);
+  const notes = parsed.data.reason
+    ? `Reprogramaci\u00f3n: ${parsed.data.reason}${booking.notes ? `\n${booking.notes}` : ""}`
+    : booking.notes;
 
-  // ── Notificaciones ────────────────────────────────────────────────────────────
+  await prisma.booking.update({
+    where: { id: bookingId },
+    data: {
+      startTime:       newStartTime,
+      endTime:         newEndTime,
+      status:          "CONFIRMED",
+      rescheduleCount: { increment: 1 },
+      notes,
+    },
+  });
+
+  // ── Notificaciones WhatsApp ───────────────────────────────────────────────────
   if (org.whatsappEnabled && booking.patientPhone) {
     const data = {
       patientName:      booking.patientName,
@@ -132,9 +130,6 @@ export async function POST(
     };
     const msg = buildRescheduleMessage(data);
     sendWhatsAppText(booking.patientPhone, msg).catch(console.error);
-    if (booking.professional.phone) {
-      sendWhatsAppText(booking.professional.phone, msg).catch(console.error);
-    }
   }
 
   return NextResponse.json({ success: true, startTime: newStartTime, endTime: newEndTime });
