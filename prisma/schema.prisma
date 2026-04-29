@@ -1,37 +1,28 @@
+// ============================================================
+// Prisma Schema — SaaS Reservación Multi-Tenant
+// ============================================================
+
 generator client {
-  provider = "prisma-client"
-  output   = "../app/generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../app/generated/prisma"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
+
+// ------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------
 
 enum BookingStatus {
   PENDING
   CONFIRMED
   CANCELLED
-  RESCHEDULED
   COMPLETED
-}
-
-enum PaymentStatus {
-  UNPAID
-  PAID
-  REFUNDED
-}
-
-enum NotificationType {
-  BOOKING_CONFIRMED
-  BOOKING_CANCELLED
-  BOOKING_RESCHEDULED
-  REMINDER_24H
-}
-
-enum NotificationChannel {
-  WHATSAPP
-  EMAIL
-  CALENDAR
+  NO_SHOW
 }
 
 enum NotificationStatus {
@@ -40,6 +31,25 @@ enum NotificationStatus {
   SENT
   FAILED
 }
+
+enum NotificationType {
+  BOOKING_CONFIRMATION
+  BOOKING_REMINDER
+  BOOKING_CANCELLATION
+  BOOKING_RESCHEDULE
+}
+
+/// Tipos de plantilla de horario semanal
+enum ScheduleType {
+  NORMAL     // Semana normal de trabajo
+  HOLIDAY    // Semana de feriado (horario reducido u otro)
+  VACATION   // El profesional está de vacaciones (sin slots)
+  CUSTOM     // Cualquier otra variación nombrada
+}
+
+// ------------------------------------------------------------
+// ORGANIZATION
+// ------------------------------------------------------------
 
 model Organization {
   id                    String   @id @default(cuid())
@@ -76,100 +86,58 @@ model Organization {
   patients                Patient[]
   notificationJobs        NotificationJob[]
   apiKeys                 ApiKey[]
+  availabilitySchedules   AvailabilitySchedule[]
   googleCalendarConnection GoogleCalendarConnection?
 
   @@map("organizations")
 }
 
-model GoogleCalendarConnection {
-  id             String    @id @default(cuid())
-  organizationId String    @unique @map("organization_id")
-  accessToken    String    @map("access_token")
-  refreshToken   String?   @map("refresh_token")
-  expiresAt      DateTime? @map("expires_at")
-  calendarId     String?   @map("calendar_id")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt      @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  @@map("google_calendar_connections")
-}
-
-// API Keys para integracion headless con ecommerces externos
-model ApiKey {
-  id             String    @id @default(cuid())
-  organizationId String    @map("organization_id")
-  name           String
-  keyHash        String    @unique @map("key_hash")
-  keyPrefix      String    @map("key_prefix")
-  allowedOrigins String[]  @map("allowed_origins")
-  active         Boolean   @default(true)
-  lastUsedAt     DateTime? @map("last_used_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt      @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-  @@index([keyHash])
-  @@map("api_keys")
-}
-
-model Patient {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  phone          String
-  name           String?
-  email          String?
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt      @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  bookings     Booking[]
-
-  @@unique([organizationId, phone])
-  @@index([organizationId])
-  @@map("patients")
-}
+// ------------------------------------------------------------
+// PROFESSIONAL
+// ------------------------------------------------------------
 
 model Professional {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  name                String
-  email               String?
-  phone               String?
-  specialty           String?
-  googleCalendarToken String?  @map("google_calendar_token")
-  googleCalendarId    String?  @map("google_calendar_id")
-  active              Boolean  @default(true)
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt      @map("updated_at")
+  id             String  @id @default(cuid())
+  organizationId String  @map("organization_id")
+  name           String
+  email          String?
+  specialty      String?
+  bio            String?
+  avatarUrl      String? @map("avatar_url")
+  active         Boolean @default(true)
 
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  services          Service[]
-  availabilityRules AvailabilityRule[]
-  blackoutDates     BlackoutDate[]
-  bookings          Booking[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  services              Service[]
+  bookings              Booking[]
+  availabilityRules     AvailabilityRule[]
+  blackoutDates         BlackoutDate[]
+  availabilitySchedules AvailabilitySchedule[]
 
   @@index([organizationId])
-  @@index([organizationId, active])
   @@map("professionals")
 }
 
+// ------------------------------------------------------------
+// SERVICE
+// ------------------------------------------------------------
+
 model Service {
-  id              String   @id @default(cuid())
-  organizationId  String   @map("organization_id")
-  professionalId  String   @map("professional_id")
-  name            String
-  description     String?
-  imageUrl        String?  @map("image_url")
-  durationMinutes Int      @map("duration_minutes")
-  price           Decimal  @db.Decimal(10, 2)
-  currency        String   @default("USD")
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt      @map("updated_at")
+  id             String  @id @default(cuid())
+  organizationId String  @map("organization_id")
+  professionalId String  @map("professional_id")
+  name           String
+  description    String?
+  imageUrl       String? @map("image_url")
+  durationMinutes Int    @map("duration_minutes")
+  price          Decimal @db.Decimal(10, 2)
+  currency       String  @default("USD")
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
@@ -177,29 +145,145 @@ model Service {
 
   @@index([organizationId])
   @@index([professionalId])
-  @@index([organizationId, active])
   @@map("services")
 }
+
+// ------------------------------------------------------------
+// PATIENT
+// ------------------------------------------------------------
+
+model Patient {
+  id             String  @id @default(cuid())
+  organizationId String  @map("organization_id")
+  name           String
+  email          String?
+  phone          String?
+  notes          String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+
+  @@index([organizationId])
+  @@map("patients")
+}
+
+// ------------------------------------------------------------
+// BOOKING
+// ------------------------------------------------------------
+
+model Booking {
+  id             String        @id @default(cuid())
+  organizationId String        @map("organization_id")
+  professionalId String        @map("professional_id")
+  serviceId      String        @map("service_id")
+  patientId      String?       @map("patient_id")
+  status         BookingStatus @default(PENDING)
+
+  patientName  String  @map("patient_name")
+  patientEmail String? @map("patient_email")
+  patientPhone String? @map("patient_phone")
+
+  startTime DateTime @map("start_time")
+  endTime   DateTime @map("end_time")
+  notes     String?
+
+  totalAmount    Decimal? @map("total_amount")    @db.Decimal(10, 2)
+  depositAmount  Decimal? @map("deposit_amount")  @db.Decimal(10, 2)
+  paymentStatus  String?  @map("payment_status")
+  paymentMethod  String?  @map("payment_method")
+  rescheduleCount Int    @default(0) @map("reschedule_count")
+
+  externalBookingId String? @map("external_booking_id")
+  apiKeyId          String? @map("api_key_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  professional     Professional      @relation(fields: [professionalId], references: [id])
+  service          Service           @relation(fields: [serviceId], references: [id])
+  patient          Patient?          @relation(fields: [patientId], references: [id])
+  notificationJobs NotificationJob[]
+
+  @@index([organizationId])
+  @@index([professionalId, startTime])
+  @@index([patientEmail])
+  @@map("bookings")
+}
+
+// ------------------------------------------------------------
+// AVAILABILITY SCHEDULE (plantillas de horario)
+// ------------------------------------------------------------
+
+/// Una plantilla de horario semanal para un profesional.
+/// Permite definir diferentes versiones del horario:
+///   - NORMAL: semana regular de trabajo
+///   - HOLIDAY: semana de feriado (puede tener menos horas o ninguna)
+///   - VACATION: el profesional está de vacaciones (sin citas)
+///   - CUSTOM: cualquier variación con nombre propio
+///
+/// Uso:
+///   - isDefault=true: se usa cuando no hay otra plantilla vigente
+///   - validFrom/validTo: rango de fechas en que esta plantilla tiene prioridad
+///   - Las reglas del horario (AvailabilityRule) apuntan a esta plantilla
+model AvailabilitySchedule {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  professionalId String       @map("professional_id")
+  name           String       // ej: "Semana normal", "Feriados mayo", "Vacaciones julio 2026"
+  scheduleType   ScheduleType @default(NORMAL) @map("schedule_type")
+  isDefault      Boolean      @default(false)  @map("is_default")
+  validFrom      DateTime?    @map("valid_from") @db.Date  // NULL = sin límite de inicio
+  validTo        DateTime?    @map("valid_to")   @db.Date  // NULL = sin límite de fin
+  active         Boolean      @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  professional      Professional       @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  availabilityRules AvailabilityRule[]
+
+  @@index([professionalId])
+  @@index([organizationId])
+  @@index([professionalId, active])
+  @@map("availability_schedules")
+}
+
+// ------------------------------------------------------------
+// AVAILABILITY RULE
+// ------------------------------------------------------------
 
 model AvailabilityRule {
   id                  String   @id @default(cuid())
   organizationId      String   @map("organization_id")
   professionalId      String   @map("professional_id")
-  dayOfWeek           Int      @map("day_of_week")
-  startTime           String   @map("start_time")
-  endTime             String   @map("end_time")
+  scheduleId          String?  @map("schedule_id")   // NULL = regla global (legado)
+  dayOfWeek           Int      @map("day_of_week")   // 0=dom, 1=lun ... 6=sab
+  startTime           String   @map("start_time")    // "08:00"
+  endTime             String   @map("end_time")      // "17:00"
   slotDurationMinutes Int      @map("slot_duration_minutes")
   active              Boolean  @default(true)
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt      @map("updated_at")
 
-  professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  professional Professional          @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  schedule     AvailabilitySchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([professionalId])
   @@index([professionalId, dayOfWeek, active])
+  @@index([scheduleId])
   @@map("availability_rules")
 }
+
+// ------------------------------------------------------------
+// BLACKOUT DATE (días/horas bloqueadas individualmente)
+// ------------------------------------------------------------
 
 model BlackoutDate {
   id             String   @id @default(cuid())
@@ -209,90 +293,78 @@ model BlackoutDate {
   startTime      String?  @map("start_time")
   endTime        String?  @map("end_time")
   reason         String?
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt      @map("updated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
 
   professional Professional @relation(fields: [professionalId], references: [id], onDelete: Cascade)
 
-  @@index([organizationId])
-  @@index([professionalId])
   @@index([professionalId, date])
   @@map("blackout_dates")
 }
 
-model Booking {
-  id                 String        @id @default(cuid())
-  organizationId     String        @map("organization_id")
-  professionalId     String        @map("professional_id")
-  serviceId          String        @map("service_id")
-  patientId          String?       @map("patient_id")
-  patientName        String        @map("patient_name")
-  patientEmail       String?       @map("patient_email")
-  patientPhone       String        @map("patient_phone")
-  scheduledAt        DateTime      @map("scheduled_at")
-  durationMinutes    Int           @map("duration_minutes")
-  status             BookingStatus @default(PENDING)
-  paymentStatus      PaymentStatus @default(UNPAID) @map("payment_status")
-  paymentId          String?       @map("payment_id")
-  refundAmount       Decimal?      @map("refund_amount") @db.Decimal(10, 2)
-  googleEventId      String?       @map("google_event_id")
-  cancellationReason String?       @map("cancellation_reason")
-  accessToken        String?       @map("access_token")
-  createdAt          DateTime      @default(now()) @map("created_at")
-  updatedAt          DateTime      @updatedAt      @map("updated_at")
+// ------------------------------------------------------------
+// NOTIFICATION JOB
+// ------------------------------------------------------------
 
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  professional     Professional        @relation(fields: [professionalId], references: [id], onDelete: Restrict)
-  service          Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
-  patient          Patient?            @relation(fields: [patientId], references: [id], onDelete: SetNull)
-  reschedules      BookingReschedule[]
-  notificationJobs NotificationJob[]
+model NotificationJob {
+  id             String             @id @default(cuid())
+  organizationId String             @map("organization_id")
+  bookingId      String             @map("booking_id")
+  type           NotificationType
+  status         NotificationStatus @default(PENDING)
+  scheduledFor   DateTime           @map("scheduled_for")
+  sentAt         DateTime?          @map("sent_at")
+  error          String?
 
-  @@index([organizationId])
-  @@index([professionalId])
-  @@index([serviceId])
-  @@index([patientId])
-  @@index([organizationId, scheduledAt])
-  @@index([professionalId, scheduledAt])
-  @@index([patientPhone])
-  @@index([accessToken])
-  @@map("bookings")
-}
-
-model BookingReschedule {
-  id                  String   @id @default(cuid())
-  organizationId      String   @map("organization_id")
-  bookingId           String   @map("booking_id")
-  previousScheduledAt DateTime @map("previous_scheduled_at")
-  newScheduledAt      DateTime @map("new_scheduled_at")
-  reason              String?
-  createdAt           DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 
-  @@index([organizationId])
-  @@index([bookingId])
-  @@map("booking_reschedules")
-}
-
-model NotificationJob {
-  id             String              @id @default(cuid())
-  organizationId String              @map("organization_id")
-  bookingId      String              @map("booking_id")
-  type           NotificationType
-  channel        NotificationChannel
-  status         NotificationStatus  @default(PENDING)
-  scheduledFor   DateTime?           @map("scheduled_for")
-  attempts       Int                 @default(0)
-  lastError      String?             @map("last_error")
-  createdAt      DateTime            @default(now()) @map("created_at")
-  updatedAt      DateTime            @updatedAt      @map("updated_at")
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  booking      Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-  @@index([bookingId])
   @@index([status, scheduledFor])
   @@map("notification_jobs")
+}
+
+// ------------------------------------------------------------
+// API KEY
+// ------------------------------------------------------------
+
+model ApiKey {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  keyHash        String   @unique @map("key_hash")
+  keyPrefix      String   @map("key_prefix")
+  allowedOrigins String[] @map("allowed_origins")
+  active         Boolean  @default(true)
+  lastUsedAt     DateTime? @map("last_used_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+// ------------------------------------------------------------
+// GOOGLE CALENDAR CONNECTION
+// ------------------------------------------------------------
+
+model GoogleCalendarConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @unique @map("organization_id")
+  accessToken    String    @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  expiresAt      DateTime? @map("expires_at")
+  calendarId     String?   @map("calendar_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("google_calendar_connections")
 }
