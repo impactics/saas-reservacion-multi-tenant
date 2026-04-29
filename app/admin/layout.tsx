@@ -10,8 +10,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   const isSuperAdmin = session.user.isSuperAdmin;
 
-  // Para superadmin: cargar todas las orgs para el switcher
-  // Para org admin:  mostrar solo el nombre de su org
   const orgs = isSuperAdmin
     ? await prisma.organization.findMany({ orderBy: { name: "asc" }, select: { id: true, slug: true, name: true } })
     : [];
@@ -37,26 +35,35 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <p className="text-xs text-gray-400 truncate">{session.user.email}</p>
         </div>
 
-        {/* Org switcher — solo superadmin */}
+        {/* ── SECCIÓN SUPER ADMIN ── */}
         {isSuperAdmin && (
-          <div className="mb-4">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Organizaciones</p>
-            <div className="flex flex-col gap-0.5">
-              {orgs.map((org) => (
-                <a
-                  key={org.id}
-                  href={`/admin?org=${org.slug}`}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-600 hover:bg-gray-100 transition-colors"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-teal-500 shrink-0" />
-                  {org.name}
-                </a>
-              ))}
-            </div>
-          </div>
+          <>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Super Admin</p>
+            <NavLink href="/super-admin/organizations">🏢 Organizaciones</NavLink>
+
+            {/* Org switcher */}
+            {orgs.length > 0 && (
+              <div className="mt-2 mb-2">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Ver como org</p>
+                <div className="flex flex-col gap-0.5">
+                  {orgs.map((org) => (
+                    <a
+                      key={org.id}
+                      href={`/admin?org=${org.slug}`}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-gray-600 hover:bg-gray-100 transition-colors"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-500 shrink-0" />
+                      {org.name}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1">Panel admin</p>
+        {/* ── SECCIÓN PANEL ADMIN ── */}
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1 mt-2">Panel admin</p>
         <NavLink href="/admin">📅 Citas</NavLink>
         <NavLink href="/admin/services">💊 Servicios</NavLink>
         <NavLink href="/admin/availability">🕐 Disponibilidad</NavLink>
