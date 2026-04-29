@@ -5,7 +5,7 @@
  * Verifica disponibilidad del slot, registra historial, notifica por WhatsApp.
  *
  * Auth: cookie patient_token (paciente) O query param ?adminKey=... (admin)
- * Body: { scheduledAt: string (ISO), reason?: string }
+ * Body: { startTime: string (ISO), reason?: string }
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,10 +13,11 @@ import { prisma } from "@/lib/prisma";
 import { verifyPatientToken, getPatientTokenFromCookie } from "@/lib/patient-auth";
 import { sendWhatsAppText, buildRescheduleMessage } from "@/lib/whatsapp";
 import { z } from "zod";
+import { differenceInMinutes } from "date-fns";
 
 const RescheduleSchema = z.object({
-  scheduledAt: z.iso.datetime(),
-  reason:      z.string().optional(),
+  startTime: z.iso.datetime(),
+  reason:    z.string().optional(),
 });
 
 export async function POST(
@@ -27,37 +28,28 @@ export async function POST(
   const body = await req.json().catch(() => ({}));
 
   const parsed = RescheduleSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success)
+    return NextResponse.json({ error: "Datos inv\u00e1lidos", details: parsed.error.flatten() }, { status: 400 });
 
   const org = await prisma.organization.findUnique({
     where: { slug },
     select: { id: true, name: true, timezone: true, whatsappEnabled: true, maxReschedules: true },
   });
-  if (!org) return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
+  if (!org) return NextResponse.json({ error: "Organizaci\u00f3n no encontrada" }, { status: 404 });
 
-  // ── Autenticación ─────────────────────────────────────────────────────────────
+  // ── Autenticaci\u00f3n ─────────────────────────────────────────────────────────────
   const adminKey  = req.nextUrl.searchParams.get("adminKey");
   const isAdmin   = adminKey === process.env.ADMIN_API_KEY;
   let   isPatient = false;
   let   patientId: string | undefined;
 
   if (!isAdmin) {
-    const cookieHeader  = req.headers.get("cookie");
-    const token = getPatientTokenFromCookie(cookieHeader);
+    const token = getPatientTokenFromCookie(req.headers.get("cookie"));
     if (token) {
       const payload = await verifyPatientToken(token);
       if (payload && payload.orgId === org.id) { isPatient = true; patientId = payload.patientId; }
     }
-    if (!isPatient) {
-      const accessToken = req.nextUrl.searchParams.get("token");
-      if (accessToken) {
-        const bk = await prisma.booking.findFirst({
-          where: { id: bookingId, accessToken, organizationId: org.id },
-          select: { id: true, patientId: true },
-        });
-        if (bk) { isPatient = true; patientId = bk.patientId ?? undefined; }
-      }
-    }
+    // accessToken no existe en el schema — solo auth por cookie
     if (!isPatient) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
@@ -65,74 +57,78 @@ export async function POST(
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId, organizationId: org.id },
     include: {
-      service:      true,
-      professional: true,
+      service:      { select: { name: true, durationMinutes: true, currency: true } },
+      professional: { select: { name: true, phone: true } },
       reschedules:  { select: { id: true } },
     },
   });
-  if (!booking) return NextResponse.json({ error: "Cita no encontrada" }, { status: 404 });
-  if (booking.status === "CANCELLED" || booking.status === "COMPLETED") {
-    return NextResponse.json({ error: `No se puede reprogramar una cita ${booking.status.toLowerCase()}` }, { status: 409 });
-  }
-
-  if (isPatient && patientId && booking.patientId !== patientId) {
-    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
-  }
-
-  // Verificar límite de reprogramaciones
-  if (booking.reschedules.length >= org.maxReschedules) {
+  if (!booking)
+    return NextResponse.json({ error: "Cita no encontrada" }, { status: 404 });
+  if (booking.status === "CANCELLED" || booking.status === "COMPLETED")
     return NextResponse.json(
-      { error: `Has alcanzado el límite de ${org.maxReschedules} reprogramación(es)` },
+      { error: `No se puede reprogramar una cita ${booking.status.toLowerCase()}` },
+      { status: 409 }
+    );
+
+  if (isPatient && patientId && booking.patientId !== patientId)
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+
+  // L\u00edmite de reprogramaciones
+  if (booking.reschedules.length >= org.maxReschedules)
+    return NextResponse.json(
+      { error: `Has alcanzado el l\u00edmite de ${org.maxReschedules} reprogramaci\u00f3n(es)` },
       { status: 422 }
     );
-  }
 
-  const newScheduledAt = new Date(parsed.data.scheduledAt);
+  // Duración original = diferencia entre startTime y endTime guardados
+  const originalDurationMs  = booking.endTime.getTime() - booking.startTime.getTime();
+  const newStartTime        = new Date(parsed.data.startTime);
+  const newEndTime          = new Date(newStartTime.getTime() + originalDurationMs);
+  const durationMinutes     = differenceInMinutes(booking.endTime, booking.startTime);
 
-  // Verificar disponibilidad del nuevo slot
+  // Verificar disponibilidad del nuevo slot (overlap check)
   const conflict = await prisma.booking.findFirst({
     where: {
       id:             { not: bookingId },
       professionalId: booking.professionalId,
       status:         { in: ["PENDING", "CONFIRMED"] },
-      scheduledAt: {
-        gte: newScheduledAt,
-        lt:  new Date(newScheduledAt.getTime() + booking.durationMinutes * 60000),
-      },
+      startTime:      { lt: newEndTime },
+      endTime:        { gt: newStartTime },
     },
   });
-  if (conflict) return NextResponse.json({ error: "El slot ya no está disponible" }, { status: 409 });
+  if (conflict)
+    return NextResponse.json({ error: "El slot ya no est\u00e1 disponible" }, { status: 409 });
 
-  // ── Actualizar en transacción ─────────────────────────────────────────────────
-  const prevScheduledAt = booking.scheduledAt;
+  // ── Actualizar en transacci\u00f3n ─────────────────────────────────────────────────
+  const prevStartTime = booking.startTime;
   await prisma.$transaction([
     prisma.bookingReschedule.create({
       data: {
         organizationId:      org.id,
         bookingId,
-        previousScheduledAt: prevScheduledAt,
-        newScheduledAt,
+        previousScheduledAt: prevStartTime,
+        newScheduledAt:      newStartTime,
         reason:              parsed.data.reason ?? null,
       },
     }),
     prisma.booking.update({
       where: { id: bookingId },
-      data:  { scheduledAt: newScheduledAt, status: "RESCHEDULED" },
+      data:  { startTime: newStartTime, endTime: newEndTime, status: "CONFIRMED" },
     }),
   ]);
 
   // ── Notificaciones ────────────────────────────────────────────────────────────
-  if (org.whatsappEnabled) {
+  if (org.whatsappEnabled && booking.patientPhone) {
     const data = {
       patientName:      booking.patientName,
       patientPhone:     booking.patientPhone,
       serviceName:      booking.service.name,
       professionalName: booking.professional.name,
-      scheduledAt:      prevScheduledAt,
-      durationMinutes:  booking.durationMinutes,
+      scheduledAt:      prevStartTime,
+      durationMinutes,
       organizationName: org.name,
       timezone:         org.timezone,
-      newScheduledAt,
+      newScheduledAt:   newStartTime,
     };
     const msg = buildRescheduleMessage(data);
     sendWhatsAppText(booking.patientPhone, msg).catch(console.error);
@@ -141,5 +137,5 @@ export async function POST(
     }
   }
 
-  return NextResponse.json({ success: true, scheduledAt: newScheduledAt });
+  return NextResponse.json({ success: true, startTime: newStartTime, endTime: newEndTime });
 }
