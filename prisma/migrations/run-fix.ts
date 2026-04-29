@@ -1,58 +1,54 @@
 /**
- * run-fix.ts
- * Ejecuta el SQL de fix_bookings_table.sql contra Neon
+ * run-fix.ts  — usa el driver pg estándar, compatible con cualquier versión
  * Uso: npx tsx prisma/migrations/run-fix.ts
  */
 import { readFileSync } from 'fs';
-import { join } from 'path';
-import { neon } from '@neondatabase/serverless';
-import * as dotenv from 'dotenv';
+import { join }         from 'path';
+import { Client }       from 'pg';
+import * as dotenv      from 'dotenv';
 
-// Cargar variables de entorno desde .env.local
+// Intentar .env.local primero, luego .env
 dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '.env' });
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!DATABASE_URL) {
-  console.error('❌ DATABASE_URL no encontrado en .env.local');
+  console.error('❌ DATABASE_URL no encontrado en .env.local ni en .env');
   process.exit(1);
 }
 
 async function main() {
-  console.log('🔧 Conectando a Neon...');
-  const sql = neon(DATABASE_URL!);
+  const client = new Client({ connectionString: DATABASE_URL });
+  await client.connect();
+  console.log('🔧 Conectado a Neon vía pg');
 
   const sqlFile = readFileSync(
     join(process.cwd(), 'prisma/migrations/fix_bookings_table.sql'),
     'utf-8'
   );
 
-  console.log('🚀 Ejecutando migración...');
+  // Ejecutar todo el archivo como una sola transacción
+  console.log('🚀 Ejecutando migración...\n');
 
-  // Ejecutar cada statement por separado
-  const statements = sqlFile
-    .split(';')
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith('--'));
-
-  for (const statement of statements) {
-    try {
-      await sql(statement);
-      console.log('✅', statement.split('\n')[0].substring(0, 60) + '...');
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Ignorar errores de "already exists" o "does not exist"
-      if (message.includes('already exists') || message.includes('does not exist')) {
-        console.log('⚠️  Skip (ya existe/no existe):', message.substring(0, 80));
-      } else {
-        console.error('❌ Error en statement:', statement.substring(0, 100));
-        console.error('   Detalle:', message);
-      }
-    }
+  try {
+    await client.query('BEGIN');
+    await client.query(sqlFile);
+    await client.query('COMMIT');
+    console.log('✅ Migración aplicada correctamente.');
+  } catch (err: unknown) {
+    await client.query('ROLLBACK');
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('❌ Error — se hizo ROLLBACK:', message);
+    process.exit(1);
+  } finally {
+    await client.end();
   }
 
-  console.log('\n🎉 Migración completada. Verifica en Neon que bookings tenga:');
-  console.log('   start_time, end_time, notes, total_amount, reschedule_count...');
+  console.log('\n🎉 bookings recreada. Columnas correctas:');
+  console.log('   start_time, end_time, notes, total_amount,');
+  console.log('   reschedule_count, deposit_amount, payment_method...');
+  console.log('\nAhora corre: git commit --allow-empty -m "fix: db synced" && git push');
 }
 
 main();
