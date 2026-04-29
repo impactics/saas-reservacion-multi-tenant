@@ -28,12 +28,15 @@ export async function POST(req: Request) {
 
   const body = await req.json();
   const parsed = createSchema.safeParse(body);
-  // Zod v4: .issues en lugar de .errors
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos" }, { status: 400 });
 
   const { name, slug, timezone } = parsed.data;
 
-  const existing = await prisma.organization.findUnique({ where: { slug } });
+  // select explícito para no leer columnas faltantes en la DB
+  const existing = await prisma.organization.findUnique({
+    where: { slug },
+    select: { id: true },
+  });
   if (existing) return NextResponse.json({ error: "El slug ya está en uso" }, { status: 409 });
 
   const org = await prisma.organization.create({
