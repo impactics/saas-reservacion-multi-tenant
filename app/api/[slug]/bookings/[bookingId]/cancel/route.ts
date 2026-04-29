@@ -2,7 +2,7 @@
  * POST /api/{slug}/bookings/{bookingId}/cancel
  *
  * Cancela una cita. Si el pago fue realizado, calcula el reembolso según
- * la política de la organización y solicita el reembolso a Payphone.
+ * la política de la organización.
  *
  * Auth: cookie patient_token (paciente) O query param ?adminKey=... (admin)
  * Body: { reason?: string }
@@ -12,8 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyPatientToken, getPatientTokenFromCookie } from "@/lib/patient-auth";
 import { refundPayphonePayment, calcRefundAmount } from "@/lib/payphone";
-import { sendWhatsAppText } from "@/lib/whatsapp";
-import { buildCancellationMessage } from "@/lib/whatsapp";
+import { sendWhatsAppText, buildCancellationMessage } from "@/lib/whatsapp";
 
 export async function POST(
   req: NextRequest,
@@ -34,9 +33,9 @@ export async function POST(
   if (!org) return NextResponse.json({ error: "Organización no encontrada" }, { status: 404 });
 
   // ── Autenticación ─────────────────────────────────────────────────────────────
-  const adminKey   = req.nextUrl.searchParams.get("adminKey");
-  const isAdmin    = adminKey === process.env.ADMIN_API_KEY;
-  let   isPatient  = false;
+  const adminKey  = req.nextUrl.searchParams.get("adminKey");
+  const isAdmin   = adminKey === process.env.ADMIN_API_KEY;
+  let   isPatient = false;
   let   patientId: string | undefined;
 
   if (!isAdmin) {
@@ -49,24 +48,16 @@ export async function POST(
         patientId = payload.patientId;
       }
     }
-    if (!isPatient) {
-      // También aceptar accessToken por query param (link de email)
-      const accessToken = req.nextUrl.searchParams.get("token");
-      if (accessToken) {
-        const bk = await prisma.booking.findFirst({
-          where: { id: bookingId, accessToken, organizationId: org.id },
-          select: { id: true, patientId: true },
-        });
-        if (bk) { isPatient = true; patientId = bk.patientId ?? undefined; }
-      }
-    }
     if (!isPatient) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
   // ── Cargar cita ───────────────────────────────────────────────────────────────
   const booking = await prisma.booking.findFirst({
     where: { id: bookingId, organizationId: org.id },
-    include: { service: true, professional: true },
+    include: {
+      service: { select: { name: true, price: true, currency: true, durationMinutes: true } },
+      professional: { select: { name: true } },
+    },
   });
   if (!booking) return NextResponse.json({ error: "Cita no encontrada" }, { status: 404 });
   if (booking.status === "CANCELLED") {
@@ -82,12 +73,15 @@ export async function POST(
   }
 
   // ── Calcular reembolso ────────────────────────────────────────────────────────
-  const now            = new Date();
-  const msHasta        = booking.scheduledAt.getTime() - now.getTime();
-  const horasHasta     = msHasta / (1000 * 60 * 60);
-  const totalCents     = booking.service.price
+  const now        = new Date();
+  const msHasta    = booking.startTime.getTime() - now.getTime();
+  const horasHasta = msHasta / (1000 * 60 * 60);
+  const totalCents = booking.totalAmount
+    ? Math.round(Number(booking.totalAmount) * 100)
+    : booking.service.price
     ? Math.round(Number(booking.service.price) * 100)
     : 0;
+
   const { refundCents, pct } = calcRefundAmount(
     totalCents,
     horasHasta,
@@ -99,33 +93,35 @@ export async function POST(
   let refundSuccess = true;
   let refundError: string | undefined;
 
-  if (booking.paymentStatus === "PAID" && booking.paymentId && refundCents > 0) {
-    const refundResult = await refundPayphonePayment(booking.paymentId, refundCents);
+  // paymentMethod almacena el ID de transacción de Payphone cuando aplica
+  if (booking.paymentStatus === "PAID" && booking.paymentMethod && refundCents > 0) {
+    const refundResult = await refundPayphonePayment(booking.paymentMethod, refundCents);
     refundSuccess = refundResult.success;
     refundError   = refundResult.error;
   }
 
   // ── Actualizar cita ───────────────────────────────────────────────────────────
-  const newPaymentStatus = booking.paymentStatus === "PAID" && refundCents > 0 ? "REFUNDED" : booking.paymentStatus;
+  const newPaymentStatus =
+    booking.paymentStatus === "PAID" && refundCents > 0 ? "REFUNDED" : booking.paymentStatus;
+
   await prisma.booking.update({
     where: { id: bookingId },
     data: {
-      status:             "CANCELLED",
-      cancellationReason: body?.reason ?? null,
-      paymentStatus:      newPaymentStatus,
-      refundAmount:       refundCents > 0 ? refundCents / 100 : undefined,
+      status:        "CANCELLED",
+      notes:         body?.reason ? `Cancelación: ${body.reason}` : booking.notes,
+      paymentStatus: newPaymentStatus,
     },
   });
 
-  // ── Notificaciones ────────────────────────────────────────────────────────────
-  if (org.whatsappEnabled) {
+  // ── Notificaciones WhatsApp ───────────────────────────────────────────────────
+  if (org.whatsappEnabled && booking.patientPhone) {
     const data = {
       patientName:      booking.patientName,
       patientPhone:     booking.patientPhone,
       serviceName:      booking.service.name,
       professionalName: booking.professional.name,
-      scheduledAt:      booking.scheduledAt,
-      durationMinutes:  booking.durationMinutes,
+      scheduledAt:      booking.startTime,
+      durationMinutes:  booking.service.durationMinutes,
       organizationName: org.name,
       timezone:         org.timezone,
       refundPct:        pct,
@@ -134,20 +130,7 @@ export async function POST(
     };
     const portalUrl = `${process.env.NEXT_PUBLIC_APP_URL}/${slug}/mis-citas`;
     const msg = buildCancellationMessage(data).replace("{PORTAL_URL}", portalUrl);
-
-    // Notificar al paciente
     sendWhatsAppText(booking.patientPhone, msg).catch(console.error);
-
-    // Notificar al doctor si tiene número configurado
-    if (booking.professional.phone) {
-      const doctorMsg =
-        `❌ *Cita cancelada*\n\n` +
-        `Paciente: ${booking.patientName}\n` +
-        `Servicio: ${booking.service.name}\n` +
-        `Fecha: ${booking.scheduledAt.toLocaleString("es-EC", { timeZone: org.timezone })}\n` +
-        (body?.reason ? `Motivo: ${body.reason}` : "");
-      sendWhatsAppText(booking.professional.phone, doctorMsg).catch(console.error);
-    }
   }
 
   return NextResponse.json({
