@@ -11,7 +11,7 @@ export interface Slot {
 
 export async function getAvailableSlots(
   professionalId: string,
-  dateStr: string,      // "YYYY-MM-DD" en timezone local del tenant
+  dateStr: string,       // "YYYY-MM-DD" en timezone local del tenant
   organizationId: string
 ): Promise<Slot[]> {
   const org = await prisma.organization.findUnique({
@@ -20,7 +20,7 @@ export async function getAvailableSlots(
   });
   if (!org) return [];
 
-  const tz = org.timezone;
+  const tz        = org.timezone;
   const localDate = toZonedTime(parseISO(dateStr), tz);
   const dayOfWeek = localDate.getDay();
 
@@ -39,13 +39,14 @@ export async function getAvailableSlots(
     },
   });
 
+  // Booking no tiene durationMinutes — usamos startTime + endTime
   const existingBookings = await prisma.booking.findMany({
     where: {
       professionalId,
       status:    { in: ["PENDING", "CONFIRMED"] },
       startTime: { gte: fromZonedTime(dayStart, tz), lte: fromZonedTime(dayEnd, tz) },
     },
-    select: { startTime: true, durationMinutes: true },
+    select: { startTime: true, endTime: true },
   });
 
   const slots: Slot[] = [];
@@ -71,17 +72,14 @@ export async function getAvailableSlots(
         return cursor < bEnd && slotEnd > bStart;
       });
 
-      const occupied = existingBookings.some((bk) => {
-        const bkEnd = addMinutes(bk.startTime, bk.durationMinutes);
-        return cursor < bkEnd && slotEnd > bk.startTime;
-      });
+      const occupied = existingBookings.some((bk) => cursor < bk.endTime && slotEnd > bk.startTime);
 
       if (!blocked && !occupied) {
         slots.push({
           start:      cursor.toISOString(),
           end:        slotEnd.toISOString(),
-          localStart: format(toZonedTime(cursor,   tz), "HH:mm"),
-          localEnd:   format(toZonedTime(slotEnd,  tz), "HH:mm"),
+          localStart: format(toZonedTime(cursor,  tz), "HH:mm"),
+          localEnd:   format(toZonedTime(slotEnd, tz), "HH:mm"),
         });
       }
 
